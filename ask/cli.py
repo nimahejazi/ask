@@ -1,11 +1,14 @@
 import sys
 from ask.config import Config
-from ask.provider import MockProvider, Provider
+from ask.provider import MockProvider, Provider, OllamaProvider
 
-def get_provider(name: str) -> Provider:
+def get_provider(name: str, config: Config) -> Provider:
     if name == "mock":
         return MockProvider()
-    # Other providers will be added in ticket 02 and 07
+    if name == "ollama":
+        base_url = config.get("ollama_base_url", OllamaProvider.DEFAULT_BASE_URL)
+        model = config.get("ollama_model", OllamaProvider.DEFAULT_MODEL)
+        return OllamaProvider(base_url=base_url, model=model)
     raise NotImplementedError(f"Provider {name} not implemented")
 
 def main():
@@ -25,7 +28,7 @@ def main():
 
     provider_name = config.get("provider", "mock")
     try:
-        provider = get_provider(provider_name)
+        provider = get_provider(provider_name, config)
     except NotImplementedError as e:
         print(e)
         sys.exit(1)
