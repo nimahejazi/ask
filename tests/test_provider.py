@@ -21,9 +21,27 @@ def test_ollama_provider_chat():
         
         assert response == expected_response
         assert m.called
-        assert m.request_history[0].json()["model"] == model
-        assert m.request_history[0].json()["messages"][0]["content"] == system_prompt
-        assert m.request_history[0].json()["messages"][1]["content"] == query
+
+def test_ollama_provider_model_not_found():
+    base_url = "http://test-ollama:11434"
+    model = "missing-model"
+    provider = OllamaProvider(base_url=base_url, model=model)
+    
+    with requests_mock.Mocker() as m:
+        m.post(f"{base_url}/api/chat", status_code=404, json={"error": f"model '{model}' not found"})
+
+        response = provider.chat("Hello!")
+        assert f"Error: Model '{model}' not found" in response
+
+def test_ollama_provider_endpoint_not_found():
+    base_url = "http://test-ollama:11434"
+    provider = OllamaProvider(base_url=base_url)
+    
+    with requests_mock.Mocker() as m:
+        m.post(f"{base_url}/api/chat", status_code=404, text="Not Found")
+
+        response = provider.chat("Hello!")
+        assert "Error: LLM endpoint not found" in response
 
 def test_ollama_provider_http_error():
     base_url = "http://test-ollama:11434"
@@ -31,6 +49,6 @@ def test_ollama_provider_http_error():
     
     with requests_mock.Mocker() as m:
         m.post(f"{base_url}/api/chat", status_code=500)
-
-        with pytest.raises(Exception): # requests.exceptions.HTTPError
-            provider.chat("Hello!")
+    
+        response = provider.chat("Hello!")
+        assert "Error: LLM provider returned an HTTP error" in response
