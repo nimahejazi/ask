@@ -22,10 +22,17 @@ def extract_command(text: str) -> str:
     match = re.search(r"```(?:[a-zA-Z]*)\n([\s\S]*?)\n```", text)
     return match.group(1) if match else text
 
+def handle_response(response: str, extract_command_only: bool):
+    if extract_command_only:
+        print(extract_command(response))
+    else:
+        print(response)
+
 def main():
     parser = argparse.ArgumentParser(description='ask - AI CLI')
     parser.add_argument('query', nargs='*', help='Your query to the AI')
     parser.add_argument('-c', '--command', action='store_true', help='Extract only executable command blocks')
+    parser.add_argument('--it', action='store_true', help='Start an interactive chat session')
     args = parser.parse_args()
 
     config = Config()
@@ -56,7 +63,7 @@ def main():
                 config.set("lmstudio_model", model)
 
     query = " ".join(args.query) if args.query else None
-    if not query:
+    if not query and not args.it:
         parser.print_help()
         sys.exit(1)
 
@@ -68,12 +75,25 @@ def main():
         sys.exit(1)
 
     system_prompt = config.get("system_prompt", "")
+
+    if args.it:
+        print("Interactive mode started. Type 'exit' to quit.")
+        while True:
+            try:
+                user_input = input("> ")
+                if user_input.lower() == "exit":
+                    break
+                if not user_input.strip():
+                    continue
+                
+                response = provider.chat(user_input, system_prompt=system_prompt)
+                handle_response(response, args.command)
+            except (EOFError, KeyboardInterrupt):
+                break
+        return
+
     response = provider.chat(query, system_prompt=system_prompt)
-    
-    if args.command:
-        print(extract_command(response))
-    else:
-        print(response)
+    handle_response(response, args.command)
 
 if __name__ == "__main__":
     main()

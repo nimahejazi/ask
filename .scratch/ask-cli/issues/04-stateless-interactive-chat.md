@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Implement input loop when `--it` is passed
-- [ ] Support "exit" keyword to terminate session
-- [ ] Verify context is not persisted across different tool invocations
+- [x] Implement input loop when `--it` is passed
+- [x] Support "exit" keyword to terminate session
+- [x] Verify context is not persisted across different tool invocations
