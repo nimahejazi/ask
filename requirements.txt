@@ -3,5 +3,6 @@ tomli_w==1.2.0
 requests==2.32.3
 pytest==8.3.2
 requests-mock==1.11.0
+questionary==2.1.1
 
 

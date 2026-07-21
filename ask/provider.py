@@ -19,6 +19,17 @@ class OllamaProvider(Provider):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
 
+    @classmethod
+    def get_available_models(cls, base_url: str = None) -> list[str]:
+        url = f"{(base_url or cls.DEFAULT_BASE_URL).rstrip('/')}/api/tags"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            return [m["name"] for m in data.get("models", [])]
+        except Exception:
+            return []
+
     def chat(self, query: str, system_prompt: str = "") -> str:
         url = f"{self.base_url}/api/chat"
         payload = {
@@ -52,5 +63,42 @@ class OllamaProvider(Provider):
         
         data = response.json()
         return data["message"]["content"]
+
+class LMStudioProvider(Provider):
+    DEFAULT_BASE_URL = "http://localhost:1234"
+    DEFAULT_MODEL = "local-model"
+
+    def __init__(self, base_url: str = None, model: str = None):
+        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self.model = model or self.DEFAULT_MODEL
+
+    @classmethod
+    def get_available_models(cls, base_url: str = None) -> list[str]:
+        url = f"{(base_url or cls.DEFAULT_BASE_URL).rstrip('/')}/v1/models"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            return [m["id"] for m in data.get("data", [])]
+        except Exception:
+            return []
+
+    def chat(self, query: str, system_prompt: str = "") -> str:
+        url = f"{self.base_url}/v1/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ],
+            "temperature": 0.7,
+        }
+        try:
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error connect to LM Studio at {self.base_url}: {e}"
 
 
