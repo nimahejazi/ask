@@ -1,4 +1,6 @@
 import sys
+import argparse
+import re
 import questionary
 from ask.config import Config
 from ask.provider import MockProvider, Provider, OllamaProvider, LMStudioProvider
@@ -16,7 +18,16 @@ def get_provider(name: str, config: Config) -> Provider:
         return LMStudioProvider(base_url=base_url, model=model)
     raise NotImplementedError(f"Provider {name} not implemented")
 
+def extract_command(text: str) -> str:
+    match = re.search(r"```(?:[a-zA-Z]*)\n([\s\S]*?)\n```", text)
+    return match.group(1) if match else text
+
 def main():
+    parser = argparse.ArgumentParser(description='ask - AI CLI')
+    parser.add_argument('query', nargs='*', help='Your query to the AI')
+    parser.add_argument('-c', '--command', action='store_true', help='Extract only executable command blocks')
+    args = parser.parse_args()
+
     config = Config()
     
     if not config.exists():
@@ -44,9 +55,9 @@ def main():
                 ).ask()
                 config.set("lmstudio_model", model)
 
-    query = " ".join(sys.argv[1:])
+    query = " ".join(args.query) if args.query else None
     if not query:
-        print('Usage: ask "your query"')
+        parser.print_help()
         sys.exit(1)
 
     provider_name = config.get("provider", "mock")
@@ -56,8 +67,13 @@ def main():
         print(e)
         sys.exit(1)
 
-    response = provider.chat(query)
-    print(response)
+    system_prompt = config.get("system_prompt", "")
+    response = provider.chat(query, system_prompt=system_prompt)
+    
+    if args.command:
+        print(extract_command(response))
+    else:
+        print(response)
 
 if __name__ == "__main__":
     main()

@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Support for a custom system prompt in `.askrc` is integrated into the request
-- [ ] `-c` flag correctly parses and displays only the code block from the AI response
-- [ ] CLI behaves normally (conversational) when `-c` is omitted
+- [x] Support for a custom system prompt in `.askrc` is integrated into the request
+- [x] `-c` flag correctly parses and displays only the code block from the AI response
+- [x] CLI behaves normally (conversational) when `-c` is omitted
