@@ -55,7 +55,8 @@ def handle_response(response: dict, extract_command_only: bool):
     if extract_command_only:
         print(extract_command(content))
     else:
-        console.print(Markdown(content))
+        md = Markdown(content, style="default", justify="left")
+        console.print(md)
     
     return {"has_tool_calls": False, "content": content}
 
