@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Create a Homebrew formula for the `ask` tool
-- [ ] Verify installation via brew and executable availability in PATH
+- [x] Create a Homebrew formula for the `ask` tool
+- [x] Verify installation via brew and executable availability in PATH
 - [ ] Test install/update cycle
