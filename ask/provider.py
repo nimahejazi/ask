@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import requests
 import json
 import sys
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterator, Tuple
 from ask.tools import format_for_openai
 
 
@@ -30,10 +30,16 @@ def normalize_tool_calls(tool_calls: list[dict]) -> list[dict]:
     return normalized
 
 
+from typing import Iterator, Tuple
+
 class Provider(ABC):
     @abstractmethod
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         pass
+    
+    def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
+        """Generator that yields chunks of the response as they arrive."""
+        yield ""
     
     @classmethod
     def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
@@ -55,6 +61,51 @@ class OllamaProvider(Provider):
     def __init__(self, base_url: str = None, model: str = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
+
+    def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
+        url = f"{self.base_url}/api/chat"
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True
+        }
+        
+        effective_tools = []
+        if tools and self.supports_tools(self.base_url, self.model):
+            effective_tools = [format_for_openai(t) for t in tools]
+        elif tools:
+            print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
+        
+        if effective_tools:
+            payload["tools"] = effective_tools
+
+        try:
+            response = requests.post(url, json=payload, stream=True)
+            response.raise_for_status()
+            
+            full_content = ""
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    try:
+                        chunk = json.loads(line_str)
+                        message = chunk.get("message", {})
+                        content = message.get("content", "")
+                        if content:
+                            yield content
+                        full_content += content
+                        
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            pass
 
     @classmethod
     def get_available_models(cls, base_url: str = None) -> list[str]:
@@ -99,13 +150,29 @@ class OllamaProvider(Provider):
         except Exception:
             return False
 
-    def _chat_streaming(self, payload: dict) -> dict:
-        """Handle Ollama responses. For 'stream: false', it's a single JSON response.
-        For actual streaming (which models may do), we accumulate chunks."""
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/api/chat"
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False
+        }
         
+        effective_tools = []
+        if tools and self.supports_tools(self.base_url, self.model):
+            effective_tools = [format_for_openai(t) for t in tools]
+        elif tools:
+            print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
+        
+        if effective_tools:
+            payload["tools"] = effective_tools
+
         try:
-            payload["stream"] = False
             response = requests.post(url, json=payload)
             
             if response.status_code == 404:
@@ -158,8 +225,17 @@ class OllamaProvider(Provider):
         except Exception as e:
             return {"content": f"An unexpected error occurred: {e}", "tool_calls": []}
 
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
-        url = f"{self.base_url}/api/chat"
+
+class LMStudioProvider(Provider):
+    DEFAULT_BASE_URL = "http://localhost:1234"
+    DEFAULT_MODEL = "local-model"
+
+    def __init__(self, base_url: str = None, model: str = None):
+        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self.model = model or self.DEFAULT_MODEL
+
+    def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
+        url = f"{self.base_url}/v1/chat/completions"
         messages = [{"role": "system", "content": system_prompt}]
         if history:
             messages.extend(history)
@@ -168,9 +244,10 @@ class OllamaProvider(Provider):
         payload = {
             "model": self.model,
             "messages": messages,
-            "stream": False
+            "temperature": 0.7,
+            "stream": True
         }
-        
+
         effective_tools = []
         if tools and self.supports_tools(self.base_url, self.model):
             effective_tools = [format_for_openai(t) for t in tools]
@@ -180,16 +257,28 @@ class OllamaProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
-        return self._chat_streaming(payload)
-
-
-class LMStudioProvider(Provider):
-    DEFAULT_BASE_URL = "http://localhost:1234"
-    DEFAULT_MODEL = "local-model"
-
-    def __init__(self, base_url: str = None, model: str = None):
-        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        self.model = model or self.DEFAULT_MODEL
+        try:
+            response = requests.post(url, json=payload, stream=True)
+            response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith("data: "):
+                        chunk_str = line_str[6:]
+                        if chunk_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(chunk_str)
+                            choice = chunk.get("choices", [])[0]
+                            delta = choice.get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, IndexError):
+                            continue
+        except Exception:
+            pass
 
     @classmethod
     def get_available_models(cls, base_url: str = None) -> list[str]:
@@ -244,6 +333,7 @@ class LMStudioProvider(Provider):
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
+            "stream": False
         }
 
         effective_tools = []
@@ -280,6 +370,81 @@ class AnthropicProvider(Provider):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
         self.api_key = api_key or self._get_api_key()
+
+    def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
+        url = f"{self.base_url}/messages"
+        
+        anthropic_messages = []
+        if history:
+            for msg in history:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    anthropic_messages.append({"role": "user", "content": content})
+                elif role == "assistant":
+                    anthropic_messages.append({"role": "assistant", "content": content})
+        
+        anthropic_messages.append({"role": "user", "content": query})
+
+        payload = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": 1024,
+            "stream": True
+        }
+        
+        if system_prompt:
+            payload["system"] = system_prompt
+        
+        effective_tools = []
+        if tools and self.supports_tools(self.base_url, self.model):
+            for tool in tools:
+                formatted_tool = format_for_openai(tool)
+                anthropic_tool = {
+                    "name": formatted_tool.get("name", ""),
+                    "description": formatted_tool.get("description", ""),
+                    "input_schema": formatted_tool.get("parameters", {})
+                }
+                effective_tools.append(anthropic_tool)
+        
+        if effective_tools:
+            payload["tools"] = effective_tools
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        
+        full_content = ""
+        try:
+            response = requests.post(url, json=payload, headers=headers, stream=True)
+            
+            if response.status_code == 401:
+                return
+            
+            if response.status_code >= 400:
+                return
+            
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith("data: "):
+                        chunk_str = line_str[6:]
+                        if chunk_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(chunk_str)
+                            delta = chunk.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                if text:
+                                    yield text
+                                full_content += text
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+        except Exception:
+            pass
 
     def _get_api_key(self) -> str:
         return ""
@@ -327,6 +492,7 @@ class AnthropicProvider(Provider):
             "model": self.model,
             "messages": anthropic_messages,
             "max_tokens": 1024,
+            "stream": False
         }
         
         if system_prompt:
@@ -410,6 +576,62 @@ class ChatGPTProvider(Provider):
         self.model = model or self.DEFAULT_MODEL
         self.api_key = api_key or self._get_api_key()
 
+    def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
+        url = f"{self.base_url}/chat/completions"
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": True
+        }
+
+        effective_tools = []
+        if tools and self.supports_tools(self.base_url, self.model):
+            effective_tools = [format_for_openai(t) for t in tools]
+        elif tools:
+            print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
+        
+        if effective_tools:
+            payload["tools"] = effective_tools
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "content-type": "application/json"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers, stream=True)
+            
+            if response.status_code == 401:
+                return
+            
+            if response.status_code >= 400:
+                return
+            
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith("data: "):
+                        chunk_str = line_str[6:]
+                        if chunk_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(chunk_str)
+                            choice = chunk.get("choices", [])[0]
+                            delta = choice.get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, IndexError):
+                            continue
+        except Exception:
+            pass
+
     def _get_api_key(self) -> str:
         return ""
 
@@ -478,6 +700,7 @@ class ChatGPTProvider(Provider):
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
+            "stream": False
         }
 
         effective_tools = []

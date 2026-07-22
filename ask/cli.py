@@ -4,6 +4,7 @@ import re
 import questionary
 import subprocess
 import json
+from typing import List, Dict, Any
 from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
@@ -59,6 +60,33 @@ def handle_response(response: dict, extract_command_only: bool):
         console.print(md)
     
     return {"has_tool_calls": False, "content": content}
+
+
+def stream_response(provider: 'Provider', query: str, system_prompt: str = "", history: list = None, tools: List[Dict[str, Any]] = None):
+    """Stream the response from the provider and display it in real-time."""
+    full_content = ""
+    
+    # Check if this is a mock or basic provider that doesn't actually stream
+    import inspect
+    
+    try:
+        chunks = []
+        for chunk in provider.chat_stream(query, system_prompt=system_prompt, history=history, tools=[]):
+            if chunk:
+                print(chunk, end='', flush=True)
+                full_content += chunk
+                chunks.append(chunk)
+        
+        # If we only got empty chunks, this is a mock - fall back to regular chat
+        if not any(chunks) and isinstance(provider, MockProvider):
+            result = provider.chat(query, system_prompt=system_prompt, history=history, tools=tools)
+            return {"content": result["content"], "tool_calls": result.get("tool_calls", [])}
+    except Exception:
+        pass
+    
+    print()
+    
+    return {"content": full_content, "tool_calls": []}
 
 def execute_tool(tool_name: str, args: dict, tools: list) -> tuple[str, str]:
     for tool in tools:
@@ -181,6 +209,15 @@ def main():
 
     system_prompt = config.get("system_prompt", "")
 
+    # Only stream for real providers that have actual streaming implementations
+    # Real providers are OllamaProvider, LMStudioProvider, AnthropicProvider, ChatGPTProvider
+    provider_name = type(provider).__name__
+    can_stream = (
+        hasattr(provider, 'chat_stream') 
+        and callable(getattr(provider, 'chat_stream'))
+        and provider_name in ('OllamaProvider', 'LMStudioProvider', 'AnthropicProvider', 'ChatGPTProvider')
+    )
+    
     if args.it:
         messages = []
         initial_query = " ".join(args.query) if args.query else None
@@ -196,7 +233,12 @@ def main():
                 if user_input.lower() == "exit":
                     break
                 
-                response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
+                if can_stream and not args.command and not tools:
+                    stream_result = stream_response(provider, user_input, system_prompt=system_prompt, history=list(messages), tools=[])
+                    response_dict = {"content": stream_result["content"], "tool_calls": []}
+                else:
+                    response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
+                
                 result = handle_response(response_dict, args.command)
                 
                 if result["has_tool_calls"]:
@@ -230,7 +272,12 @@ def main():
                 break
         return
 
-    response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
+    if can_stream and not args.command and not tools:
+        stream_result = stream_response(provider, query, system_prompt=system_prompt, history=None, tools=[])
+        response_dict = {"content": stream_result["content"], "tool_calls": []}
+    else:
+        response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
+    
     result = handle_response(response_dict, args.command)
     
     if result["has_tool_calls"]:
