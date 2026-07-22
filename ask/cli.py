@@ -2,8 +2,12 @@ import sys
 import argparse
 import re
 import questionary
+from rich.console import Console
+from rich.markdown import Markdown
 from ask.config import Config
 from ask.provider import MockProvider, Provider, OllamaProvider, LMStudioProvider
+
+console = Console()
 
 def get_provider(name: str, config: Config) -> Provider:
     if name == "mock":
@@ -26,7 +30,7 @@ def handle_response(response: str, extract_command_only: bool):
     if extract_command_only:
         print(extract_command(response))
     else:
-        print(response)
+        console.print(Markdown(response))
 
 def main():
     parser = argparse.ArgumentParser(description='ask - AI CLI')
@@ -77,17 +81,28 @@ def main():
     system_prompt = config.get("system_prompt", "")
 
     if args.it:
-        print("Interactive mode started. Type 'exit' to quit.")
+        messages = []
+        initial_query = " ".join(args.query) if args.query else None
+        
         while True:
             try:
-                user_input = input("> ")
+                user_input = initial_query if initial_query else input("> ")
+                if not user_input or not user_input.strip():
+                    if initial_query is not None: 
+                        initial_query = None
+                    continue
+
                 if user_input.lower() == "exit":
                     break
-                if not user_input.strip():
-                    continue
                 
-                response = provider.chat(user_input, system_prompt=system_prompt)
+                # Use a copy of messages to avoid mutating the history passed to provider if it's modified elsewhere
+                response = provider.chat(user_input, system_prompt=system_prompt, history=list(messages))
                 handle_response(response, args.command)
+                
+                messages.append({"role": "user", "content": user_input})
+                messages.append({"role": "assistant", "content": response})
+                
+                initial_query = None
             except (EOFError, KeyboardInterrupt):
                 break
         return

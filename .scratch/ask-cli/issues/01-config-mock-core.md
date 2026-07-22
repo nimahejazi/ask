@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Config file `~/.askrc` is created/read using TOML format
-- [ ] User is prompted for provider configuration on first run
-- [ ] Basic CLI entry point accepts a query string
-- [ ] A `MockProvider` returns deterministic responses for integration testing
+- [x] Config file `~/.askrc` is created/read using TOML format
+- [x] User is prompted for provider configuration on first run
+- [x] Basic CLI entry point accepts a query string
+- [x] A `MockProvider` returns deterministic responses for integration testing

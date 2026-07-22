@@ -17,10 +17,13 @@ A Python-based CLI tool named `ask` that provides a streamlined interface for in
 4. As a user, I want my configuration stored in `~/.askrc` as TOML so that it is easy to manage and supports multi-line strings.
 5. As a user, I want to set a custom agent prompt in the config so that the AI behaves according to my specific preferences.
 6. As a user, I want to use the `--it` flag to enter an interactive chat mode for follow-up questions.
-7. As a user, I want the interactive session to be stateless and end completely when I exit, ensuring no lingering context between different sessions.
-8. As a user, I want to pass a specific local script using the `-t` flag so that the AI can use that script as a tool to perform a task.
-9. As a developer, I want to define tools in Python or TS scripts using a `# @tool: name | description | args` format so that `ask` can automatically extract and present them to the LLM.
-10. As a user, I want to install the tool via Homebrew for easy installation and updates on macOS.
+7. As a user, I want my interactive session to maintain context during the conversation so that I can ask follow-up questions based on previous turns, but remain stateless across different tool invocations.
+8. As a user, I want AI responses in the terminal to be rendered with markdown formatting (bold, lists, code blocks), so they are easier to read.
+9. As a user, I want to pass an initial query when starting interactive mode (e.g., `ask "hi" --it`), so that the conversation starts with my first request immediately.
+10. As a user, I want the CLI to be quiet and avoid unnecessary welcome messages when entering interactive mode.
+11. As a user, I want to pass a specific local script using the `-t` flag so that the AI can use that script as a tool to perform a task.
+12. As a developer, I want to define tools in Python or TS scripts using a `# @tool: name | description | args` format so that `ask` can automatically extract and present them to the LLM.
+13. As a user, I want to install the tool via Homebrew for easy installation and updates on macOS.
 
 ## Implementation Decisions
 

@@ -4,11 +4,11 @@ import json
 
 class Provider(ABC):
     @abstractmethod
-    def chat(self, query: str, system_prompt: str = "") -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
         pass
 
 class MockProvider(Provider):
-    def chat(self, query: str, system_prompt: str = "") -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
         return f"Mock response to: {query}"
 
 class OllamaProvider(Provider):
@@ -30,14 +30,16 @@ class OllamaProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "") -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
         url = f"{self.base_url}/api/chat"
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ],
+            "messages": messages,
             "stream": False
         }
         
@@ -83,14 +85,16 @@ class LMStudioProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "") -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
         url = f"{self.base_url}/v1/chat/completions"
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ],
+            "messages": messages,
             "temperature": 0.7,
         }
         try:

@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Implement `Provider` concrete classes for at least one real service (e.g., Ollama)
-- [ ] API requests are correctly formed using config values from `~/.askrc`
-- [ ] Response body is extracted and returned to the CLI output
+- [x] Implement `Provider` concrete classes for at least one real service (e.g., Ollama)
+- [x] API requests are correctly formed using config values from `~/.askrc`
+- [x] Response body is extracted and returned to the CLI output
