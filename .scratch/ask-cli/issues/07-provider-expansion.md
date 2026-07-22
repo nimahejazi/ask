@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Implement Anthropic provider
-- [ ] Implement ChatGPT provider
-- [ ] Implement ML Studio provider
-- [ ] Verify each can be selected via `.askrc` config
+- [x] Implement Anthropic provider
+- [x] Implement ChatGPT provider
+- [x] Implement ML Studio provider
+- [x] Verify each can be selected via `.askrc` config
