@@ -1,5 +1,5 @@
 import pytest
-from ask.tools import parse_tool_definitions
+from ask.tools import format_for_openai, parse_tool_definitions
 import os
 
 def test_parse_tool_definitions():
@@ -32,3 +32,17 @@ def test_parse_tool_definitions():
 def test_parse_tool_definitions_missing_file():
     tools = parse_tool_definitions("non_existent_file.py")
     assert tools == []
+
+
+def test_format_for_openai_converts_shorthand_parameter_types():
+    formatted = format_for_openai({
+        "name": "get_weather",
+        "description": "Gets weather for a city",
+        "parameters": {"city": "string"},
+    })
+
+    assert formatted["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": [],
+    }

@@ -4,10 +4,18 @@ import re
 import questionary
 import subprocess
 import json
+from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from ask.config import Config
-from ask.provider import MockProvider, Provider, OllamaProvider, LMStudioProvider
+from ask.provider import (
+    MockProvider,
+    Provider,
+    OllamaProvider,
+    LMStudioProvider,
+    AnthropicProvider,
+    ChatGPTProvider,
+)
 from ask.tools import parse_tool_definitions
 
 console = Console()
@@ -20,9 +28,17 @@ def get_provider(name: str, config: Config) -> Provider:
         model = config.get("ollama_model", OllamaProvider.DEFAULT_MODEL)
         return OllamaProvider(base_url=base_url, model=model)
     if name == "lmstudio":
-        base_url = config.get("lmstudio_base_url", LMStudioProvider.DEFAULT_BASE_URL)
-        model = config.get("lmstudio_model", LMStudioProvider.DEFAULT_MODEL)
+        base_url = config.get("lmStudio_base_url", LMStudioProvider.DEFAULT_BASE_URL)
+        model = config.get("lmStudio_model", LMStudioProvider.DEFAULT_MODEL)
         return LMStudioProvider(base_url=base_url, model=model)
+    if name == "anthropic":
+        api_key = config.get("anthropic_api_key", "")
+        model = config.get("anthropic_model", AnthropicProvider.DEFAULT_MODEL)
+        return AnthropicProvider(model=model, api_key=api_key)
+    if name == "chatgpt":
+        api_key = config.get("chatgpt_api_key", "")
+        model = config.get("chatgpt_model", ChatGPTProvider.DEFAULT_MODEL)
+        return ChatGPTProvider(model=model, api_key=api_key)
     raise NotImplementedError(f"Provider {name} not implemented")
 
 def extract_command(text: str) -> str:
@@ -51,8 +67,16 @@ def execute_tool(tool_name: str, args: dict, tools: list) -> tuple[str, str]:
                 return "", f"Error: No file path for tool {tool_name}"
             
             try:
+                tool_path = Path(tool_file).resolve()
+                if tool_path.suffix.lower() == ".py":
+                    command = [sys.executable, str(tool_path)]
+                elif tool_path.suffix.lower() == ".ts":
+                    command = ["node", str(tool_path)]
+                else:
+                    command = [str(tool_path)]
+                command.append(json.dumps(args))
                 result = subprocess.run(
-                    [tool_file, json.dumps(args)],
+                    command,
                     capture_output=True,
                     text=True,
                     timeout=30
@@ -101,7 +125,7 @@ def main():
     if not config.exists():
         provider_choice = questionary.select(
             "Choose a provider:",
-            choices=["mock", "ollama", "lmstudio"]
+            choices=["mock", "ollama", "lmstudio", "anthropic", "chatgpt"]
         ).ask()
         
         config.set("provider", provider_choice)
@@ -121,7 +145,15 @@ def main():
                     "Choose an LM Studio model:",
                     choices=models
                 ).ask()
-                config.set("lmstudio_model", model)
+                config.set("lmStudio_model", model)
+        elif provider_choice == "anthropic":
+            print("Please configure your Anthropic API key:")
+            api_key = input("API Key: ")
+            config.set("anthropic_api_key", api_key)
+        elif provider_choice == "chatgpt":
+            print("Please configure your ChatGPT API key:")
+            api_key = input("API Key: ")
+            config.set("chatgpt_api_key", api_key)
 
     query = " ".join(args.query) if args.query else None
     if not query and not args.it:
@@ -200,7 +232,10 @@ def main():
             final_response = provider.chat(
                 tool_result_message,
                 system_prompt=system_prompt,
-                history=[],
+                history=[
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": result["content"]},
+                ],
                 tools=[]
             )
             handle_response(final_response, args.command)

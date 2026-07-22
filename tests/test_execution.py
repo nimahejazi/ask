@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
 import json
+from pathlib import Path
+import sys
 from ask.cli import execute_tool_calls, handle_response
 
 def test_handle_response_with_tool_calls():
@@ -57,6 +59,41 @@ def test_execute_tool_calls_success(mock_run):
     assert error == ""
     assert "Tool get_weather executed successfully" in output
     mock_run.assert_called_once()
+
+
+@patch('ask.cli.subprocess.run')
+def test_execute_tool_calls_resolves_relative_script_path(mock_run):
+    mock_result = MagicMock(returncode=0, stdout='{"temp": 72}\n')
+    mock_run.return_value = mock_result
+
+    output, error = execute_tool_calls(
+        [{"name": "get_weather", "arguments": {"city": "Paris"}}],
+        [{"name": "get_weather", "_file_path": "test_sample_tool.py"}],
+    )
+
+    assert error == ""
+    assert "get_weather" in output
+    assert mock_run.call_args.args[0][:2] == [
+        sys.executable,
+        str(Path("test_sample_tool.py").resolve()),
+    ]
+
+
+@patch('ask.cli.subprocess.run')
+def test_execute_tool_calls_runs_typescript_with_node(mock_run):
+    mock_run.return_value = MagicMock(returncode=0, stdout='{"temp": 72}\n')
+
+    output, error = execute_tool_calls(
+        [{"name": "get_weather", "arguments": {"city": "Paris"}}],
+        [{"name": "get_weather", "_file_path": "weather.ts"}],
+    )
+
+    assert error == ""
+    assert "get_weather" in output
+    assert mock_run.call_args.args[0][:2] == [
+        "node",
+        str(Path("weather.ts").resolve()),
+    ]
 
 @patch('ask.cli.subprocess.run')
 def test_execute_tool_calls_failure(mock_run):

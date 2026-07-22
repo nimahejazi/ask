@@ -1,21 +1,32 @@
-# Sample Tool Testing
+#!/usr/bin/env python3
+"""Sample weather tool for ask CLI testing."""
 
-To test the tool execution loop with Ollama:
+import sys
+import json
 
-1. Ensure Ollama is running: `ollama serve`
-2. Use a model that supports tools (like Qwen2.5-Coder):
-   ```bash
-   python3 -m ask.cli -t test_sample_tool.py "What's the weather in Paris?"
-   ```
 
-If the model doesn't support native tool calling, you'll see:
-```
-Warning: Model 'xxx' does not support native tool calling. Tools will be ignored.
-Mock response to: What's the weather in Paris? (Tools provided: ['get_weather'])
-```
+# @tool: get_weather | Gets weather for a city | {"city": "string"}
+def main():
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "No arguments provided"}))
+        sys.exit(1)
 
-The actual workflow is:
-1. CLI parses `# @tool:` comments from the script
-2. Sends tool definitions to LLM with user query
-3. If model returns `tool_calls`, executes matching local scripts
-4. Feeds output back to LLM for final synthesized answer
+    try:
+        args = json.loads(sys.argv[1])
+        city = args.get("city", "Unknown")
+
+        result = {
+            "city": city,
+            "temperature": 72,
+            "unit": "fahrenheit",
+            "condition": "sunny",
+            "humidity": 45
+        }
+        print(json.dumps(result, indent=2))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

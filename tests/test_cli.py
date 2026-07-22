@@ -59,6 +59,38 @@ def test_main_interactive_mode_with_tool_calls(mock_input, mock_get_provider, mo
 
 @patch('ask.cli.Config')
 @patch('ask.cli.get_provider')
+@patch('sys.argv', ['ask', 'weather in Paris'])
+def test_main_tool_synthesis_keeps_original_context(mock_get_provider, mock_config):
+    config_instance = mock_config.return_value
+    config_instance.exists.return_value = True
+    config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
+
+    mock_provider = MagicMock()
+    mock_provider.chat.side_effect = [
+        {
+            "content": "Checking the weather.",
+            "tool_calls": [{"name": "get_weather", "arguments": {"city": "Paris"}}],
+        },
+        {"content": "It is sunny.", "tool_calls": []},
+    ]
+    mock_get_provider.return_value = mock_provider
+
+    with patch('ask.cli.execute_tool_calls', return_value=('sunny', '')):
+        main()
+
+    mock_provider.chat.assert_any_call(
+        "Tool execution results:\nsunny",
+        system_prompt="",
+        history=[
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": "Checking the weather."},
+        ],
+        tools=[],
+    )
+
+
+@patch('ask.cli.Config')
+@patch('ask.cli.get_provider')
 @patch('sys.argv', ['ask', '-c', 'hello'])
 def test_main_command_mode(mock_get_provider, mock_config):
     # Setup mocks
@@ -154,4 +186,3 @@ def test_main_interactive_mode_with_initial_query(mock_input, mock_get_provider,
             ],
             tools=[]
         )
-

@@ -15,9 +15,13 @@ def format_for_openai(tool: ToolDefinition) -> Dict[str, Any]:
     params = tool["parameters"]
     # If it doesn't look like a JSON Schema (missing 'type'), wrap it
     if not isinstance(params, dict) or "type" not in params:
+        properties = params if isinstance(params, dict) else {}
         params = {
             "type": "object",
-            "properties": params if isinstance(params, dict) else {},
+            "properties": {
+                name: {"type": value} if isinstance(value, str) else value
+                for name, value in properties.items()
+            },
             "required": []
         }
 
