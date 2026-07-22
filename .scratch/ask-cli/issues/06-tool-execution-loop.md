@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Detect "tool_call" in LLM response
-- [ ] Execute the corresponding local script with provided arguments
-- [ ] Return script output to the LLM and display final synthesized answer to user
+- [x] Detect "tool_call" in LLM response
+- [x] Execute the corresponding local script with provided arguments
+- [x] Return script output to the LLM and display final synthesized answer to user
