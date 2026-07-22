@@ -20,12 +20,41 @@ def test_main_conversational(mock_get_provider, mock_config):
     config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
     
     mock_provider = MagicMock()
-    mock_provider.chat.return_value = "Hello AI!"
+    mock_provider.chat.return_value = {"content": "Hello AI!", "tool_calls": []}
     mock_get_provider.return_value = mock_provider
 
     with patch('ask.cli.console.print') as mock_rich_print:
         main()
         mock_rich_print.assert_called()
+
+@patch('ask.cli.Config')
+@patch('ask.cli.get_provider')
+@patch('sys.argv', ['ask', '--it'])
+@patch('builtins.input', side_effect=['hello', 'exit'])
+def test_main_interactive_mode_with_tool_calls(mock_input, mock_get_provider, mock_config):
+    # Setup mocks
+    config_instance = mock_config.return_value
+    config_instance.exists.return_value = True
+    config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
+    
+    def chat_side_effect(*args, **kwargs):
+        history = kwargs.get("history", [])
+        if not history:
+            return {"content": "I'll execute a tool", "tool_calls": [
+                {"name": "test_tool", "arguments": {"arg": "value"}}
+            ]}
+        else:
+            return {"content": "Here is the result", "tool_calls": []}
+    
+    mock_provider = MagicMock()
+    mock_provider.chat.side_effect = chat_side_effect
+    mock_get_provider.return_value = mock_provider
+
+    with patch('ask.cli.console.print') as mock_rich_print, \
+         patch('ask.cli.execute_tool_calls') as mock_execute:
+        mock_execute.return_value = ("success", "")
+        main()
+        assert mock_execute.called
 
 
 @patch('ask.cli.Config')
@@ -38,7 +67,7 @@ def test_main_command_mode(mock_get_provider, mock_config):
     config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
     
     mock_provider = MagicMock()
-    mock_provider.chat.return_value = "Here is the command:\n```bash\necho hello\n```"
+    mock_provider.chat.return_value = {"content": "Here is the command:\n```bash\necho hello\n```", "tool_calls": []}
     mock_get_provider.return_value = mock_provider
 
     with patch('builtins.print') as mock_print:
@@ -59,7 +88,7 @@ def test_main_system_prompt(mock_get_provider, mock_config):
     config_instance.get.side_effect = get_val
     
     mock_provider = MagicMock()
-    mock_provider.chat.return_value = "Response"
+    mock_provider.chat.return_value = {"content": "Response", "tool_calls": []}
     mock_get_provider.return_value = mock_provider
 
     main()
@@ -76,7 +105,7 @@ def test_main_interactive_mode(mock_input, mock_get_provider, mock_config):
     config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
     
     mock_provider = MagicMock()
-    mock_provider.chat.return_value = "AI Response"
+    mock_provider.chat.return_value = {"content": "AI Response", "tool_calls": []}
     mock_get_provider.return_value = mock_provider
 
     with patch('ask.cli.console.print') as mock_rich_print:
@@ -109,7 +138,7 @@ def test_main_interactive_mode_with_initial_query(mock_input, mock_get_provider,
     config_instance.get.side_effect = lambda key, default=None: "mock" if key == "provider" else ""
     
     mock_provider = MagicMock()
-    mock_provider.chat.return_value = "AI Response"
+    mock_provider.chat.return_value = {"content": "AI Response", "tool_calls": []}
     mock_get_provider.return_value = mock_provider
 
     with patch('ask.cli.console.print') as mock_rich_print:

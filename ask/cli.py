@@ -2,6 +2,8 @@ import sys
 import argparse
 import re
 import questionary
+import subprocess
+import json
 from rich.console import Console
 from rich.markdown import Markdown
 from ask.config import Config
@@ -27,11 +29,58 @@ def extract_command(text: str) -> str:
     match = re.search(r"```(?:[a-zA-Z]*)\n([\s\S]*?)\n```", text)
     return match.group(1) if match else text
 
-def handle_response(response: str, extract_command_only: bool):
+def handle_response(response: dict, extract_command_only: bool):
+    content = response.get("content", "")
+    tool_calls = response.get("tool_calls", [])
+    
+    if tool_calls:
+        return {"has_tool_calls": True, "content": content, "tool_calls": tool_calls}
+    
     if extract_command_only:
-        print(extract_command(response))
+        print(extract_command(content))
     else:
-        console.print(Markdown(response))
+        console.print(Markdown(content))
+    
+    return {"has_tool_calls": False, "content": content}
+
+def execute_tool(tool_name: str, args: dict, tools: list) -> tuple[str, str]:
+    for tool in tools:
+        if tool["name"] == tool_name:
+            tool_file = tool.get("_file_path")
+            if not tool_file:
+                return "", f"Error: No file path for tool {tool_name}"
+            
+            try:
+                result = subprocess.run(
+                    [tool_file, json.dumps(args)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip(), ""
+                else:
+                    return "", f"Error executing tool {tool_name}: {result.stderr.strip()}"
+            except subprocess.TimeoutExpired:
+                return "", f"Error: Tool execution timed out for {tool_name}"
+            except Exception as e:
+                return "", f"Error executing tool {tool_name}: {str(e)}"
+    
+    return "", f"Error: Unknown tool {tool_name}"
+
+def execute_tool_calls(tool_calls: list, tools: list) -> tuple[str, str]:
+    results = []
+    for call in tool_calls:
+        tool_name = call.get("name", "")
+        args = call.get("arguments", {})
+        
+        output, error = execute_tool(tool_name, args, tools)
+        if error:
+            return "", error
+        
+        results.append(f"Tool {tool_name} executed successfully. Output: {output}")
+    
+    return "\n".join(results), ""
 
 def main():
     parser = argparse.ArgumentParser(description='ask - AI CLI')
@@ -46,6 +95,8 @@ def main():
     tools = []
     if args.tools:
         tools = parse_tool_definitions(args.tools)
+        for i, tool in enumerate(tools):
+            tools[i]["_file_path"] = args.tools
 
     if not config.exists():
         provider_choice = questionary.select(
@@ -101,20 +152,58 @@ def main():
                 if user_input.lower() == "exit":
                     break
                 
-                # Use a copy of messages to avoid mutating the history passed to provider if it's modified elsewhere
-                response = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
-                handle_response(response, args.command)
+                response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
+                result = handle_response(response_dict, args.command)
                 
-                messages.append({"role": "user", "content": user_input})
-                messages.append({"role": "assistant", "content": response})
+                if result["has_tool_calls"]:
+                    tool_output, error = execute_tool_calls(result["tool_calls"], tools)
+                    
+                    if error:
+                        console.print(f"[bold red]{error}[/bold red]")
+                        messages.append({"role": "user", "content": user_input})
+                        messages.append({"role": "assistant", "content": error})
+                    else:
+                        tool_result_message = f"Tool execution results:\n{tool_output}"
+                        messages.append({"role": "user", "content": user_input})
+                        messages.append({"role": "assistant", "content": result["content"]})
+                        
+                        final_response = provider.chat(
+                            tool_result_message,
+                            system_prompt=system_prompt,
+                            history=list(messages),
+                            tools=[]
+                        )
+                        handle_response(final_response, args.command)
+                        
+                        messages.append({"role": "user", "content": tool_result_message})
+                        messages.append({"role": "assistant", "content": final_response.get("content", "")})
+                else:
+                    messages.append({"role": "user", "content": user_input})
+                    messages.append({"role": "assistant", "content": result["content"]})
                 
                 initial_query = None
             except (EOFError, KeyboardInterrupt):
                 break
         return
 
-    response = provider.chat(query, system_prompt=system_prompt, tools=tools)
-    handle_response(response, args.command)
+    response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
+    result = handle_response(response_dict, args.command)
+    
+    if result["has_tool_calls"]:
+        tool_output, error = execute_tool_calls(result["tool_calls"], tools)
+        
+        if error:
+            console.print(f"[bold red]{error}[/bold red]")
+        else:
+            tool_result_message = f"Tool execution results:\n{tool_output}"
+            
+            final_response = provider.chat(
+                tool_result_message,
+                system_prompt=system_prompt,
+                history=[],
+                tools=[]
+            )
+            handle_response(final_response, args.command)
 
 if __name__ == "__main__":
     main()

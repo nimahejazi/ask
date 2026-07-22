@@ -1,18 +1,19 @@
 from abc import ABC, abstractmethod
 import requests
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from ask.tools import format_for_openai
 
 class Provider(ABC):
     @abstractmethod
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         pass
 
 class MockProvider(Provider):
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         tool_info = f" (Tools provided: {[t['name'] for t in tools]})" if tools else ""
-        return f"Mock response to: {query}{tool_info}"
+        response_text = f"Mock response to: {query}{tool_info}"
+        return {"content": response_text, "tool_calls": []}
 
 class OllamaProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:11434"
@@ -33,7 +34,7 @@ class OllamaProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/api/chat"
         messages = [{"role": "system", "content": system_prompt}]
         if history:
@@ -47,7 +48,6 @@ class OllamaProvider(Provider):
         }
         
         if tools:
-            # Convert simple tool definitions to provider schema using centralized formatter
             payload["tools"] = [format_for_openai(t) for t in tools]
 
         try:
@@ -56,22 +56,23 @@ class OllamaProvider(Provider):
                 try:
                     error_data = response.json()
                     if "error" in error_data and "not found" in error_data["error"].lower():
-                        return f"Error: Model '{self.model}' not found. Please run 'ollama pull {self.model}' or check your config."
+                        return {"content": f"Error: Model '{self.model}' not found. Please run 'ollama pull {self.model}' or check your config.", "tool_calls": []}
                 except (json.JSONDecodeError, KeyError):
                     pass
-                return (f"Error: LLM endpoint not found ({url}). "
-                        "Please ensure Ollama is installed and updated to the latest version.")
+                return {"content": f"Error: LLM endpoint not found ({url}). Please ensure Ollama is installed and updated to the latest version.", "tool_calls": []}
             response.raise_for_status()
-
         except requests.exceptions.ConnectionError:
-            return f"Error: Could not connect to Ollama at {self.base_url}. Is it running?"
+            return {"content": f"Error: Could not connect to Ollama at {self.base_url}. Is it running?", "tool_calls": []}
         except requests.exceptions.HTTPError as e:
-            return f"Error: LLM provider returned an HTTP error: {e}"
+            return {"content": f"Error: LLM provider returned an HTTP error: {e}", "tool_calls": []}
         except Exception as e:
-            return f"An unexpected error occurred: {e}"
+            return {"content": f"An unexpected error occurred: {e}", "tool_calls": []}
         
         data = response.json()
-        return data["message"]["content"]
+        message = data.get("message", {})
+        content = message.get("content", "")
+        tool_calls = message.get("tool_calls", [])
+        return {"content": content, "tool_calls": tool_calls}
 
 class LMStudioProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:1234"
@@ -92,7 +93,7 @@ class LMStudioProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/v1/chat/completions"
         messages = [{"role": "system", "content": system_prompt}]
         if history:
@@ -106,15 +107,17 @@ class LMStudioProvider(Provider):
         }
 
         if tools:
-            # Convert simple tool definitions to provider schema using centralized formatter
             payload["tools"] = [format_for_openai(t) for t in tools]
 
         try:
             response = requests.post(url, json=payload)
             response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"Error connect to LM Studio at {self.base_url}: {e}"
-
-
+            return {"content": f"Error connect to LM Studio at {self.base_url}: {e}", "tool_calls": []}
+        
+        data = response.json()
+        choice = data.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content", "")
+        tool_calls = message.get("tool_calls", [])
+        return {"content": content, "tool_calls": tool_calls}

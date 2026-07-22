@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Regex parser extracts tool name, description, and args from `# @tool: ...` comments
-- [ ] Parsed definitions are converted to the provider's specific tool schema
-- [ ] Passing `-t <path>` successfully includes these tools in the LLM request
+- [x] Regex parser extracts tool name, description, and args from `# @tool: ...` comments
+- [x] Parsed definitions are converted to the provider's specific tool schema
+- [x] Passing `-t <path>` successfully includes these tools in the LLM request
