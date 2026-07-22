@@ -8,4 +8,4 @@
 
 - [x] Create a Homebrew formula for the `ask` tool
 - [x] Verify installation via brew and executable availability in PATH
-- [ ] Test install/update cycle
+- [x] Test install/update cycle
