@@ -113,6 +113,7 @@ def main():
     parser.add_argument('--it', action='store_true', help='Start an interactive chat session')
     parser.add_argument('-t', '--tools', type=str, help='Load tool definitions from a script file')
     parser.add_argument('-M', '--config-model', action='store_true', help='Reconfigure provider and model settings')
+    parser.add_argument('-S', '--show-config', action='store_true', help='Show current configuration')
     args = parser.parse_args()
 
     config = Config()
@@ -120,6 +121,10 @@ def main():
     if args.config_model:
         reconfigure_provider(config)
         console.print("[bold green]Configuration updated![/bold green]")
+        sys.exit(0)
+    
+    if args.show_config:
+        show_config(config)
         sys.exit(0)
     
     tools = []
@@ -283,6 +288,32 @@ def reconfigure_provider(config: Config):
         print("Please configure your ChatGPT API key:")
         api_key = input("API Key: ")
         config.set("chatgpt_api_key", api_key)
+
+
+def show_config(config: Config):
+    if not config.exists():
+        console.print("[bold yellow]No configuration found.[/bold yellow]")
+        console.print("Run [bold cyan]ask[/bold cyan] without arguments to configure.")
+        return
+    
+    provider = config.get("provider", "mock")
+    console.print(f"Current provider: [bold]{provider}[/bold]")
+    
+    if provider == "ollama":
+        model = config.get("ollama_model", OllamaProvider.DEFAULT_MODEL)
+        console.print(f"Model: [bold]{model}[/bold]")
+    elif provider == "lmstudio":
+        model = config.get("lmStudio_model", LMStudioProvider.DEFAULT_MODEL)
+        console.print(f"Model: [bold]{model}[/bold]")
+    elif provider == "anthropic":
+        model = config.get("anthropic_model", AnthropicProvider.DEFAULT_MODEL)
+        console.print(f"Model: [bold]{model}[/bold]")
+    elif provider == "chatgpt":
+        model = config.get("chatgpt_model", ChatGPTProvider.DEFAULT_MODEL)
+        console.print(f"Model: [bold]{model}[/bold]")
+    
+    console.print("\nUse [bold cyan]ask --config-model[/bold cyan] to change your configuration.")
+
 
 if __name__ == "__main__":
     main()
