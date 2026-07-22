@@ -112,9 +112,15 @@ def main():
     parser.add_argument('-c', '--command', action='store_true', help='Extract only executable command blocks')
     parser.add_argument('--it', action='store_true', help='Start an interactive chat session')
     parser.add_argument('-t', '--tools', type=str, help='Load tool definitions from a script file')
+    parser.add_argument('-M', '--config-model', action='store_true', help='Reconfigure provider and model settings')
     args = parser.parse_args()
 
     config = Config()
+    
+    if args.config_model:
+        reconfigure_provider(config)
+        console.print("[bold green]Configuration updated![/bold green]")
+        sys.exit(0)
     
     tools = []
     if args.tools:
@@ -239,6 +245,44 @@ def main():
                 tools=[]
             )
             handle_response(final_response, args.command)
+
+
+def reconfigure_provider(config: Config):
+    provider_choice = questionary.select(
+        "Choose a provider:",
+        choices=["mock", "ollama", "lmstudio", "anthropic", "chatgpt"]
+    ).ask()
+    
+    config.set("provider", provider_choice)
+
+    if provider_choice == "ollama":
+        models = OllamaProvider.get_available_models()
+        if models:
+            model = questionary.select(
+                "Choose an Ollama model:",
+                choices=models
+            ).ask()
+            config.set("ollama_model", model)
+        else:
+            console.print("[bold yellow]Could not fetch Ollama models. Please make sure Ollama is running.[/bold yellow]")
+    elif provider_choice == "lmstudio":
+        models = LMStudioProvider.get_available_models()
+        if models:
+            model = questionary.select(
+                "Choose an LM Studio model:",
+                choices=models
+            ).ask()
+            config.set("lmStudio_model", model)
+        else:
+            console.print("[bold yellow]Could not fetch LM Studio models. Please make sure LM Studio is running.[/bold yellow]")
+    elif provider_choice == "anthropic":
+        print("Please configure your Anthropic API key:")
+        api_key = input("API Key: ")
+        config.set("anthropic_api_key", api_key)
+    elif provider_choice == "chatgpt":
+        print("Please configure your ChatGPT API key:")
+        api_key = input("API Key: ")
+        config.set("chatgpt_api_key", api_key)
 
 if __name__ == "__main__":
     main()
