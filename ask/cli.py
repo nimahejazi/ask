@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from ask.config import Config
 from ask.provider import MockProvider, Provider, OllamaProvider, LMStudioProvider
+from ask.tools import parse_tool_definitions
 
 console = Console()
 
@@ -37,10 +38,15 @@ def main():
     parser.add_argument('query', nargs='*', help='Your query to the AI')
     parser.add_argument('-c', '--command', action='store_true', help='Extract only executable command blocks')
     parser.add_argument('--it', action='store_true', help='Start an interactive chat session')
+    parser.add_argument('-t', '--tools', type=str, help='Load tool definitions from a script file')
     args = parser.parse_args()
 
     config = Config()
     
+    tools = []
+    if args.tools:
+        tools = parse_tool_definitions(args.tools)
+
     if not config.exists():
         provider_choice = questionary.select(
             "Choose a provider:",
@@ -96,7 +102,7 @@ def main():
                     break
                 
                 # Use a copy of messages to avoid mutating the history passed to provider if it's modified elsewhere
-                response = provider.chat(user_input, system_prompt=system_prompt, history=list(messages))
+                response = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
                 handle_response(response, args.command)
                 
                 messages.append({"role": "user", "content": user_input})
@@ -107,7 +113,7 @@ def main():
                 break
         return
 
-    response = provider.chat(query, system_prompt=system_prompt)
+    response = provider.chat(query, system_prompt=system_prompt, tools=tools)
     handle_response(response, args.command)
 
 if __name__ == "__main__":

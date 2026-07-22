@@ -1,15 +1,17 @@
 from abc import ABC, abstractmethod
 import requests
 import json
+from typing import List, Dict, Any
 
 class Provider(ABC):
     @abstractmethod
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
         pass
 
 class MockProvider(Provider):
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
-        return f"Mock response to: {query}"
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
+        tool_info = f" (Tools provided: {[t['name'] for t in tools]})" if tools else ""
+        return f"Mock response to: {query}{tool_info}"
 
 class OllamaProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:11434"
@@ -30,7 +32,7 @@ class OllamaProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
         url = f"{self.base_url}/api/chat"
         messages = [{"role": "system", "content": system_prompt}]
         if history:
@@ -43,6 +45,20 @@ class OllamaProvider(Provider):
             "stream": False
         }
         
+        if tools:
+            # Convert simple tool definitions to Ollama/OpenAI format
+            formatted_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["parameters"]
+                    }
+                } for t in tools
+            ]
+            payload["tools"] = formatted_tools
+
         try:
             response = requests.post(url, json=payload)
             if response.status_code == 404:
@@ -85,7 +101,7 @@ class LMStudioProvider(Provider):
         except Exception:
             return []
 
-    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None) -> str:
+    def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> str:
         url = f"{self.base_url}/v1/chat/completions"
         messages = [{"role": "system", "content": system_prompt}]
         if history:
@@ -97,6 +113,21 @@ class LMStudioProvider(Provider):
             "messages": messages,
             "temperature": 0.7,
         }
+
+        if tools:
+            # Convert simple tool definitions to OpenAI format
+            formatted_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["parameters"]
+                    }
+                } for t in tools
+            ]
+            payload["tools"] = formatted_tools
+
         try:
             response = requests.post(url, json=payload)
             response.raise_for_status()
