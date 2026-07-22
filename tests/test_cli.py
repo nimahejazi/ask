@@ -63,7 +63,7 @@ def test_main_system_prompt(mock_get_provider, mock_config):
     mock_get_provider.return_value = mock_provider
 
     main()
-    mock_provider.chat.assert_called_with("hello", system_prompt="You are a bot.")
+    mock_provider.chat.assert_called_with("hello", system_prompt="You are a bot.", tools=[])
 
 @patch('ask.cli.Config')
 @patch('ask.cli.get_provider')
@@ -85,7 +85,7 @@ def test_main_interactive_mode(mock_input, mock_get_provider, mock_config):
         assert mock_provider.chat.call_count == 2
         
         # First call should have no history
-        mock_provider.chat.assert_any_call("hello", system_prompt="", history=[])
+        mock_provider.chat.assert_any_call("hello", system_prompt="", history=[], tools=[])
         
         # Second call should have first turn in history
         mock_provider.chat.assert_any_call(
@@ -94,7 +94,8 @@ def test_main_interactive_mode(mock_input, mock_get_provider, mock_config):
             history=[
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "AI Response"}
-            ]
+            ],
+            tools=[]
         )
 
 @patch('ask.cli.Config')
@@ -114,13 +115,14 @@ def test_main_interactive_mode_with_initial_query(mock_input, mock_get_provider,
     with patch('ask.cli.console.print') as mock_rich_print:
         main()
         assert mock_provider.chat.call_count == 2
-        mock_provider.chat.assert_any_call("initial query", system_prompt="", history=[])
+        mock_provider.chat.assert_any_call("initial query", system_prompt="", history=[], tools=[])
         mock_provider.chat.assert_any_call(
             "follow up", 
             system_prompt="", 
             history=[
                 {"role": "user", "content": "initial query"},
                 {"role": "assistant", "content": "AI Response"}
-            ]
+            ],
+            tools=[]
         )
 

@@ -1,10 +1,34 @@
 import re
-from typing import TypedDict, List, Optional
+import json
+from typing import TypedDict, List, Optional, Dict, Any
 
 class ToolDefinition(TypedDict):
     name: str
     description: str
     parameters: dict
+
+def format_for_openai(tool: ToolDefinition) -> Dict[str, Any]:
+    """
+    Converts a ToolDefinition to the OpenAI/Ollama tool schema.
+    Wraps parameters in a JSON schema object if they aren't already.
+    """
+    params = tool["parameters"]
+    # If it doesn't look like a JSON Schema (missing 'type'), wrap it
+    if not isinstance(params, dict) or "type" not in params:
+        params = {
+            "type": "object",
+            "properties": params if isinstance(params, dict) else {},
+            "required": []
+        }
+
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": params
+        }
+    }
 
 def parse_tool_definitions(file_path: str) -> List[ToolDefinition]:
     """
@@ -13,7 +37,6 @@ def parse_tool_definitions(file_path: str) -> List[ToolDefinition]:
     """
     tools = []
     # Regex to match # @tool: name | description | parameters
-    # It allows for optional spaces around the pipe separator
     pattern = re.compile(r"#\s*@tool:\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(.*)")
 
     try:
@@ -26,11 +49,8 @@ def parse_tool_definitions(file_path: str) -> List[ToolDefinition]:
                     params_str = match.group(3).strip()
                     
                     try:
-                        # Attempt to parse parameters as JSON
-                        import json
                         parameters = json.loads(params_str)
                     except json.JSONDecodeError:
-                        # Fallback or handle invalid JSON
                         parameters = {"error": f"Invalid parameter JSON: {params_str}"}
                         
                     tools.append({

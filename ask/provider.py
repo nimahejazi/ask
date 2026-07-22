@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import requests
 import json
 from typing import List, Dict, Any
+from ask.tools import format_for_openai
 
 class Provider(ABC):
     @abstractmethod
@@ -46,18 +47,8 @@ class OllamaProvider(Provider):
         }
         
         if tools:
-            # Convert simple tool definitions to Ollama/OpenAI format
-            formatted_tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t["parameters"]
-                    }
-                } for t in tools
-            ]
-            payload["tools"] = formatted_tools
+            # Convert simple tool definitions to provider schema using centralized formatter
+            payload["tools"] = [format_for_openai(t) for t in tools]
 
         try:
             response = requests.post(url, json=payload)
@@ -115,18 +106,8 @@ class LMStudioProvider(Provider):
         }
 
         if tools:
-            # Convert simple tool definitions to OpenAI format
-            formatted_tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t["parameters"]
-                    }
-                } for t in tools
-            ]
-            payload["tools"] = formatted_tools
+            # Convert simple tool definitions to provider schema using centralized formatter
+            payload["tools"] = [format_for_openai(t) for t in tools]
 
         try:
             response = requests.post(url, json=payload)
