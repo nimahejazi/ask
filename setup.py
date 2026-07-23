@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setup(
     name="nh-ask-cli",
-    version="0.2.1",
+    version="0.2.12",
     author="Nima",
     description="AI CLI tool for natural language interaction with LLMs",
     long_description=long_description,
