@@ -7,7 +7,7 @@ AI CLI tool for natural language interaction with LLMs.
 ### Using Homebrew (macOS)
 
 ```bash
-brew install anomalyco/tap/ask
+brew install nimahejazi/tap/ask
 brew update
 brew upgrade ask
 ```
@@ -15,7 +15,7 @@ brew upgrade ask
 ### From Source
 
 ```bash
-git clone https://github.com/anomalyco/ask.git
+git clone https://github.com/nimahejazi/ask.git
 cd ask
 pip install -e .
 ```
