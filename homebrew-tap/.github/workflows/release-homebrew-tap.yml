@@ -1,16 +1,14 @@
 name: Release Homebrew Tap
-
 on:
   push:
     tags:
       - 'v*'
-
 jobs:
   update-tap:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
@@ -27,6 +25,7 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download source tarball
+        id: sha256
         run: |
           cd ./tap
           curl -L "https://github.com/nimahejazi/ask/archive/refs/tags/v${{ steps.version.outputs.VERSION }}.tar.gz" -o ask.tar.gz
@@ -39,8 +38,8 @@ jobs:
           SHA256: ${{ steps.sha256.outputs.SHA256 }}
         run: |
           cd ./tap
-          sed -i.bak "s/v0.2.12/${VERSION}/g" nh-ask-cli.rb && rm nh-ask-cli.rb.bak
-          sed -i.bak "s/PLACEHOLDER_SHA256/${SHA256}/g" nh-ask-cli.rb && rm nh-ask-cli.rb.bak
+          sed -i.bak "s/v[0-9]*\.[0-9]*\.[0-9]*/v${VERSION}/g" nh-ask-cli.rb && rm nh-ask-cli.rb.bak
+          sed -i.bak "s/sha256 \"[a-f0-9]*\"/sha256 \"${SHA256}\"/g" nh-ask-cli.rb && rm nh-ask-cli.rb.bak
 
       - name: Commit and push
         run: |
