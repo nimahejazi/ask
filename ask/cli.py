@@ -8,6 +8,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.live import Live
 from ask.config import Config
 from ask.provider import (
     MockProvider,
@@ -46,7 +47,7 @@ def extract_command(text: str) -> str:
     match = re.search(r"```(?:[a-zA-Z]*)\n([\s\S]*?)\n```", text)
     return match.group(1) if match else text
 
-def handle_response(response: dict, extract_command_only: bool):
+def handle_response(response: dict, extract_command_only: bool, already_rendered: bool = False):
     content = response.get("content", "")
     tool_calls = response.get("tool_calls", [])
     
@@ -55,7 +56,7 @@ def handle_response(response: dict, extract_command_only: bool):
     
     if extract_command_only:
         print(extract_command(content))
-    else:
+    elif not already_rendered:
         md = Markdown(content, style="default", justify="left")
         console.print(md)
     
@@ -63,28 +64,27 @@ def handle_response(response: dict, extract_command_only: bool):
 
 
 def stream_response(provider: 'Provider', query: str, system_prompt: str = "", history: list = None, tools: List[Dict[str, Any]] = None):
-    """Stream the response from the provider and display it in real-time."""
+    """Stream the response from the provider and display it in real-time with Rich Markdown."""
     full_content = ""
     
-    # Check if this is a mock or basic provider that doesn't actually stream
-    import inspect
-    
     try:
-        chunks = []
+        markdown = Markdown("", style="default", justify="left")
+        live = Live(markdown, console=console, refresh_per_second=20)
+        live.start()
+        
         for chunk in provider.chat_stream(query, system_prompt=system_prompt, history=history, tools=[]):
             if chunk:
-                print(chunk, end='', flush=True)
                 full_content += chunk
-                chunks.append(chunk)
+                new_markdown = Markdown(full_content, style="default", justify="left")
+                live.update(new_markdown)
         
-        # If we only got empty chunks, this is a mock - fall back to regular chat
-        if not any(chunks) and isinstance(provider, MockProvider):
+        live.stop()
+        
+        if not full_content and isinstance(provider, MockProvider):
             result = provider.chat(query, system_prompt=system_prompt, history=history, tools=tools)
             return {"content": result["content"], "tool_calls": result.get("tool_calls", [])}
     except Exception:
         pass
-    
-    print()
     
     return {"content": full_content, "tool_calls": []}
 
@@ -234,12 +234,12 @@ def main():
                     break
                 
                 if can_stream and not args.command and not tools:
-                    stream_result = stream_response(provider, user_input, system_prompt=system_prompt, history=list(messages), tools=[])
-                    response_dict = {"content": stream_result["content"], "tool_calls": []}
+                    stream_response(provider, user_input, system_prompt=system_prompt, history=list(messages), tools=[])
+                    response_dict = {"content": "", "tool_calls": []}
                 else:
                     response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
                 
-                result = handle_response(response_dict, args.command)
+                result = handle_response(response_dict, args.command, already_rendered=can_stream and not args.command and not tools)
                 
                 if result["has_tool_calls"]:
                     tool_output, error = execute_tool_calls(result["tool_calls"], tools)
@@ -259,7 +259,8 @@ def main():
                             history=list(messages),
                             tools=[]
                         )
-                        handle_response(final_response, args.command)
+                        already_rendered = can_stream and not args.command and not tools
+                        handle_response(final_response, args.command, already_rendered=already_rendered)
                         
                         messages.append({"role": "user", "content": tool_result_message})
                         messages.append({"role": "assistant", "content": final_response.get("content", "")})
@@ -273,12 +274,13 @@ def main():
         return
 
     if can_stream and not args.command and not tools:
-        stream_result = stream_response(provider, query, system_prompt=system_prompt, history=None, tools=[])
-        response_dict = {"content": stream_result["content"], "tool_calls": []}
+        stream_response(provider, query, system_prompt=system_prompt, history=None, tools=[])
+        response_dict = {"content": "", "tool_calls": []}
     else:
         response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
     
-    result = handle_response(response_dict, args.command)
+    already_rendered = can_stream and not args.command and not tools
+    result = handle_response(response_dict, args.command, already_rendered=already_rendered)
     
     if result["has_tool_calls"]:
         tool_output, error = execute_tool_calls(result["tool_calls"], tools)
@@ -297,7 +299,8 @@ def main():
                 ],
                 tools=[]
             )
-            handle_response(final_response, args.command)
+            already_rendered = can_stream and not args.command and not tools
+            handle_response(final_response, args.command, already_rendered=already_rendered)
 
 
 def reconfigure_provider(config: Config):
