@@ -4,7 +4,7 @@ with open("README.md", "r") as f:
     long_description = f.read()
 
 setup(
-    name="ask-cli",
+    name="nh-ask-cli",
     version="0.1.0",
     author="Nima",
     description="AI CLI tool for natural language interaction with LLMs",
