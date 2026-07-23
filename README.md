@@ -6,11 +6,15 @@ AI CLI tool for natural language interaction with LLMs.
 
 ### Using Homebrew (macOS)
 
+First, add and trust the tap:
+
 ```bash
-brew install nimahejazi/tap/ask
-brew update
-brew upgrade ask
+brew tap nimahejazi/tap
+brew install nh-ask-cli
+brew upgrade nh-ask-cli
 ```
+
+Note: You may need to run `brew trust nimahejazi/tap` if Homebrew requires verification.
 
 ### From Source
 
