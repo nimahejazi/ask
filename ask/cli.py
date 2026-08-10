@@ -9,6 +9,11 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.live import Live
+
+try:
+    from ask import __version__
+except ImportError:
+    __version__ = "unknown"
 from ask.config import Config
 from ask.provider import (
     MockProvider,
@@ -21,6 +26,9 @@ from ask.provider import (
 from ask.tools import parse_tool_definitions
 
 console = Console()
+
+def get_version() -> str:
+    return __version__
 
 def get_provider(name: str, config: Config) -> Provider:
     if name == "mock":
@@ -138,6 +146,7 @@ def execute_tool_calls(tool_calls: list, tools: list) -> tuple[str, str]:
 def main():
     parser = argparse.ArgumentParser(description='ask - AI CLI')
     parser.add_argument('query', nargs='*', help='Your query to the AI')
+    parser.add_argument('-v', '--version', action='store_true', help='Show version and exit')
     parser.add_argument('-c', '--command', action='store_true', help='Extract only executable command blocks')
     parser.add_argument('--it', action='store_true', help='Start an interactive chat session')
     parser.add_argument('-t', '--tools', type=str, help='Load tool definitions from a script file')
@@ -145,6 +154,10 @@ def main():
     parser.add_argument('-S', '--show-config', action='store_true', help='Show current configuration')
     args = parser.parse_args()
 
+
+    if args.version:
+        print(get_version())
+        sys.exit(0)
     config = Config()
     
     if args.config_model:
