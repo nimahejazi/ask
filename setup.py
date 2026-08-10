@@ -1,11 +1,19 @@
 from setuptools import setup, find_packages
+import re
 
 with open("README.md", "r") as f:
     long_description = f.read()
 
+def get_version():
+    with open("ask/__init__.py") as f:
+        match = re.search(r'^__version__\s*=\s*[\'"]([^\'"]+)[\'"]', f.read(), re.M)
+        if match:
+            return match.group(1)
+        raise RuntimeError("Unable to find version string")
+
 setup(
     name="nh-ask-cli",
-    version="0.2.12",
+    version=get_version(),
     author="Nima",
     description="AI CLI tool for natural language interaction with LLMs",
     long_description=long_description,
