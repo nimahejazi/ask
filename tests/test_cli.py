@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from ask.cli import main, extract_command, get_version
+import sys
+from ask.cli import main, extract_command, get_version, get_version
 
 def test_extract_command_with_code_block():
     text = "Here is the command:\n```bash\nls -la\n```"
@@ -10,11 +11,73 @@ def test_extract_command_without_code_block():
     text = "Just some text"
     assert extract_command(text) == "Just some text"
 
+
 def test_get_version_returns_string():
     version = get_version()
     assert isinstance(version, str)
     assert len(version) > 0
 
+@patch("ask.cli.get_version")
+@patch("sys.argv", ["ask", "-v"])
+def test_version_flag_short(mock_get_version, capfd):
+    mock_get_version.return_value = "0.1.0"
+    
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+    
+    captured = capfd.readouterr()
+    assert "0.1.0" in captured.out
+
+@patch("ask.cli.get_version")
+@patch("sys.argv", ["ask", "--version"])
+def test_version_flag_long(mock_get_version, capfd):
+    mock_get_version.return_value = "0.1.0"
+    
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+    
+    captured = capfd.readouterr()
+    assert "0.1.0" in captured.out
+def test_get_version_returns_string():
+    version = get_version()
+    assert isinstance(version, str)
+    assert len(version) > 0
+
+
+def test_get_version_returns_string():
+    version = get_version()
+    assert isinstance(version, str)
+    assert len(version) > 0
+
+@patch("ask.cli.get_version")
+@patch("sys.argv", ["ask", "-v"])
+def test_version_flag_short(mock_get_version, capfd):
+    mock_get_version.return_value = "0.1.0"
+    
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+    
+    captured = capfd.readouterr()
+    assert "0.1.0" in captured.out
+
+@patch("ask.cli.get_version")
+@patch("sys.argv", ["ask", "--version"])
+def test_version_flag_long(mock_get_version, capfd):
+    mock_get_version.return_value = "0.1.0"
+    
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+    
+    captured = capfd.readouterr()
+    assert "0.1.0" in captured.out
 @patch('ask.cli.Config')
 @patch('ask.cli.get_provider')
 @patch('sys.argv', ['ask', 'hello'])
