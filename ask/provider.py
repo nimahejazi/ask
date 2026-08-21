@@ -2,8 +2,15 @@ from abc import ABC, abstractmethod
 import requests
 import json
 import sys
+import os
 from typing import List, Dict, Any, Optional, Iterator, Tuple
 from ask.tools import format_for_openai
+
+DEFAULT_REQUEST_TIMEOUT = 120
+
+class ProviderError(Exception):
+    """Raised when a provider call fails (auth, connection, timeout, http error)."""
+    pass
 
 
 def normalize_tool_calls(tool_calls: list[dict]) -> list[dict]:
@@ -23,11 +30,131 @@ def normalize_tool_calls(tool_calls: list[dict]) -> list[dict]:
             raise ValueError(
                 f"Invalid tool call arguments for '{name}': expected an object"
             )
-        normalized.append({
+        entry = {
             "name": name,
             "arguments": arguments,
-        })
+        }
+        # Preserve tool call id for native protocol (OpenAI, Anthropic)
+        if "id" in tool_call:
+            entry["id"] = tool_call["id"]
+        elif function.get("id"):
+            entry["id"] = function["id"]
+        normalized.append(entry)
     return normalized
+
+
+def resolve_max_tokens(raw: Any, warn: bool = True) -> Optional[int]:
+    """Validate max_tokens value. Returns int or None (meaning use default).
+    Prints a warning to stderr for nonsense values and returns None or clamped value.
+    """
+    if raw is None:
+        return None
+    try:
+        # Allow numeric strings
+        val = int(raw) if not isinstance(raw, bool) else int(raw)
+        # But reject booleans explicitly
+        if isinstance(raw, bool):
+            raise ValueError
+    except (ValueError, TypeError):
+        if warn:
+            print(f"Warning: Invalid max_tokens value '{raw}' — expected a positive integer. Using default.", file=sys.stderr)
+        return None
+    if val < 1:
+        if warn:
+            print(f"Warning: max_tokens {val} is too small — must be >=1. Using default.", file=sys.stderr)
+        return None
+    if val > 100000:
+        if warn:
+            print(f"Warning: max_tokens {val} is too large — clamped to 100000.", file=sys.stderr)
+        return 100000
+    return val
+
+
+def effective_max_tokens_for_anthropic(raw: Any, warn: bool = True) -> int:
+    """Anthropic requires max_tokens; default 1024 when not configured or invalid."""
+    validated = resolve_max_tokens(raw, warn=warn)
+    return validated if validated is not None else 1024
+
+
+def _build_openai_messages(system_prompt: str, history: Optional[list[dict]], query: str) -> list[dict]:
+    """Build messages for OpenAI-compatible APIs, handling native tool protocol."""
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    if history:
+        for msg in history:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                # Convert stored tool_calls (name, arguments, id) to OpenAI shape
+                converted_calls = []
+                for idx, tc in enumerate(msg["tool_calls"]):
+                    tc_id = tc.get("id") or f"call_{idx}_{tc.get('name','')}"
+                    converted_calls.append({
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": json.dumps(tc.get("arguments", {})),
+                        }
+                    })
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.get("content", ""),
+                    "tool_calls": converted_calls,
+                })
+            else:
+                messages.append(msg)
+    if query:
+        messages.append({"role": "user", "content": query})
+    return messages
+
+
+def _build_anthropic_messages(history: Optional[list[dict]], query: str) -> list[dict]:
+    """Build messages for Anthropic, handling tool_use / tool_result blocks."""
+    anthropic_messages: list[dict] = []
+    if history:
+        for msg in history:
+            role = msg.get("role", "")
+            if role == "assistant" and msg.get("tool_calls"):
+                # Assistant with tool calls -> content blocks with tool_use
+                blocks: list[dict] = []
+                content = msg.get("content", "")
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tc in msg["tool_calls"]:
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", f"toolu_{tc.get('name','')}"),
+                        "name": tc.get("name", ""),
+                        "input": tc.get("arguments", {}),
+                    })
+                anthropic_messages.append({"role": "assistant", "content": blocks})
+            elif role == "tool":
+                # Tool result -> user with tool_result block
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": msg.get("content", ""),
+                    }]
+                })
+            elif role == "user":
+                # Content may be string or already blocks; handle both
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    anthropic_messages.append({"role": "user", "content": content})
+                else:
+                    anthropic_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    anthropic_messages.append({"role": "assistant", "content": content})
+                else:
+                    anthropic_messages.append({"role": "assistant", "content": content})
+            else:
+                # Fallback: treat as user
+                anthropic_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    if query:
+        anthropic_messages.append({"role": "user", "content": query})
+    return anthropic_messages
 
 
 from typing import Iterator, Tuple
@@ -42,7 +169,7 @@ class Provider(ABC):
         yield ""
     
     @classmethod
-    def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
+    def supports_tools(cls, base_url: str = None, model: str = None, api_key: str = None) -> bool:
         """Check if the model supports tool calling."""
         return False
 
@@ -58,16 +185,20 @@ class OllamaProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_MODEL = "llama3"
 
-    def __init__(self, base_url: str = None, model: str = None):
+    def __init__(self, base_url: str = None, model: str = None, max_tokens: Any = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
+        self.max_tokens = max_tokens
+        self._tool_support_cache: Optional[bool] = None
+
+    def _supports_tools_cached(self) -> bool:
+        if self._tool_support_cache is None:
+            self._tool_support_cache = self.__class__.supports_tools(self.base_url, self.model)
+        return self._tool_support_cache
 
     def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
         url = f"{self.base_url}/api/chat"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -76,7 +207,7 @@ class OllamaProvider(Provider):
         }
         
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -84,8 +215,12 @@ class OllamaProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["options"] = {"num_predict": _mt}
+
         try:
-            response = requests.post(url, json=payload, stream=True)
+            response = requests.post(url, json=payload, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
             response.raise_for_status()
             
             full_content = ""
@@ -99,19 +234,33 @@ class OllamaProvider(Provider):
                         if content:
                             yield content
                         full_content += content
-                        
+                         
                         if chunk.get("done", False):
                             break
                     except json.JSONDecodeError:
                         continue
-        except Exception:
-            pass
+        except requests.exceptions.Timeout:
+            raise ProviderError(f"Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})")
+        except requests.exceptions.ConnectionError:
+            raise ProviderError(f"Could not connect to Ollama at {self.base_url}. Is it running?")
+        except requests.exceptions.HTTPError as e:
+            detail = ""
+            try:
+                detail = response.text.strip()
+            except Exception:
+                pass
+            suffix = f": {detail}" if detail else ""
+            raise ProviderError(f"LLM provider returned an HTTP error: {e}{suffix}")
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e))
 
     @classmethod
     def get_available_models(cls, base_url: str = None) -> list[str]:
         url = f"{(base_url or cls.DEFAULT_BASE_URL).rstrip('/')}/api/tags"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
             return [m["name"] for m in data.get("models", [])]
@@ -119,7 +268,7 @@ class OllamaProvider(Provider):
             return []
     
     @classmethod
-    def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
+    def supports_tools(cls, base_url: str = None, model: str = None, api_key: str = None) -> bool:
         """Check if the model supports tool calling by testing with a simple request."""
         try:
             test_base_url = (base_url or cls.DEFAULT_BASE_URL).rstrip("/")
@@ -152,10 +301,7 @@ class OllamaProvider(Provider):
 
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/api/chat"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -164,7 +310,7 @@ class OllamaProvider(Provider):
         }
         
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -172,8 +318,12 @@ class OllamaProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["options"] = {"num_predict": _mt}
+
         try:
-            response = requests.post(url, json=payload)
+            response = requests.post(url, json=payload, timeout=DEFAULT_REQUEST_TIMEOUT)
             
             if response.status_code == 404:
                 try:
@@ -216,6 +366,8 @@ class OllamaProvider(Provider):
             
             return {"content": full_content, "tool_calls": []}
             
+        except requests.exceptions.Timeout:
+            return {"content": f"Error: Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})", "tool_calls": []}
         except requests.exceptions.ConnectionError:
             return {"content": f"Error: Could not connect to Ollama at {self.base_url}. Is it running?", "tool_calls": []}
         except requests.exceptions.HTTPError as e:
@@ -230,16 +382,20 @@ class LMStudioProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:1234"
     DEFAULT_MODEL = "local-model"
 
-    def __init__(self, base_url: str = None, model: str = None):
+    def __init__(self, base_url: str = None, model: str = None, max_tokens: Any = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
+        self.max_tokens = max_tokens
+        self._tool_support_cache: Optional[bool] = None
+
+    def _supports_tools_cached(self) -> bool:
+        if self._tool_support_cache is None:
+            self._tool_support_cache = self.__class__.supports_tools(self.base_url, self.model)
+        return self._tool_support_cache
 
     def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
         url = f"{self.base_url}/v1/chat/completions"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -249,7 +405,7 @@ class LMStudioProvider(Provider):
         }
 
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -257,8 +413,12 @@ class LMStudioProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["max_tokens"] = _mt
+
         try:
-            response = requests.post(url, json=payload, stream=True)
+            response = requests.post(url, json=payload, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
             response.raise_for_status()
             
             for line in response.iter_lines():
@@ -277,14 +437,28 @@ class LMStudioProvider(Provider):
                                 yield content
                         except (json.JSONDecodeError, IndexError):
                             continue
-        except Exception:
-            pass
+        except requests.exceptions.Timeout:
+            raise ProviderError(f"Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})")
+        except requests.exceptions.ConnectionError:
+            raise ProviderError(f"Could not connect to LM Studio at {self.base_url}. Is it running?")
+        except requests.exceptions.HTTPError as e:
+            detail = ""
+            try:
+                detail = response.text.strip()
+            except Exception:
+                pass
+            suffix = f": {detail}" if detail else ""
+            raise ProviderError(f"LLM provider returned an HTTP error: {e}{suffix}")
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e))
 
     @classmethod
     def get_available_models(cls, base_url: str = None) -> list[str]:
         url = f"{(base_url or cls.DEFAULT_BASE_URL).rstrip('/')}/v1/models"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
             return [m["id"] for m in data.get("data", [])]
@@ -292,7 +466,7 @@ class LMStudioProvider(Provider):
             return []
     
     @classmethod
-    def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
+    def supports_tools(cls, base_url: str = None, model: str = None, api_key: str = None) -> bool:
         """Check if the model supports tool calling by testing with a simple request."""
         try:
             test_base_url = (base_url or cls.DEFAULT_BASE_URL).rstrip("/")
@@ -324,10 +498,7 @@ class LMStudioProvider(Provider):
 
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/v1/chat/completions"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -337,7 +508,7 @@ class LMStudioProvider(Provider):
         }
 
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -345,9 +516,17 @@ class LMStudioProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["max_tokens"] = _mt
+
         try:
-            response = requests.post(url, json=payload)
+            response = requests.post(url, json=payload, timeout=DEFAULT_REQUEST_TIMEOUT)
             response.raise_for_status()
+        except requests.exceptions.Timeout:
+            return {"content": f"Error: Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})", "tool_calls": []}
+        except requests.exceptions.ConnectionError:
+            return {"content": f"Error: Could not connect to LM Studio at {self.base_url}. Is it running?", "tool_calls": []}
         except Exception as e:
             return {"content": f"Error connect to LM Studio at {self.base_url}: {e}", "tool_calls": []}
         
@@ -366,30 +545,27 @@ class AnthropicProvider(Provider):
     DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
     DEFAULT_MODEL = "claude-3-opus-20240229"
 
-    def __init__(self, base_url: str = None, model: str = None, api_key: str = None):
+    def __init__(self, base_url: str = None, model: str = None, api_key: str = None, max_tokens: Any = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
         self.api_key = api_key or self._get_api_key()
+        self.max_tokens = max_tokens
+        self._tool_support_cache: Optional[bool] = None
+
+    def _supports_tools_cached(self) -> bool:
+        if self._tool_support_cache is None:
+            self._tool_support_cache = self.__class__.supports_tools(self.base_url, self.model)
+        return self._tool_support_cache
 
     def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
         url = f"{self.base_url}/messages"
         
-        anthropic_messages = []
-        if history:
-            for msg in history:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    anthropic_messages.append({"role": "user", "content": content})
-                elif role == "assistant":
-                    anthropic_messages.append({"role": "assistant", "content": content})
-        
-        anthropic_messages.append({"role": "user", "content": query})
+        anthropic_messages = _build_anthropic_messages(history, query)
 
         payload = {
             "model": self.model,
             "messages": anthropic_messages,
-            "max_tokens": 1024,
+            "max_tokens": effective_max_tokens_for_anthropic(self.max_tokens),
             "stream": True
         }
         
@@ -397,7 +573,7 @@ class AnthropicProvider(Provider):
             payload["system"] = system_prompt
         
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             for tool in tools:
                 formatted_tool = format_for_openai(tool)
                 anthropic_tool = {
@@ -418,13 +594,18 @@ class AnthropicProvider(Provider):
         
         full_content = ""
         try:
-            response = requests.post(url, json=payload, headers=headers, stream=True)
+            response = requests.post(url, json=payload, headers=headers, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
             
             if response.status_code == 401:
-                return
+                raise ProviderError("Invalid Anthropic API key. Please check your configuration.")
             
             if response.status_code >= 400:
-                return
+                try:
+                    error_data = response.json()
+                    error_message = str(error_data.get("error", {}).get("message", ""))
+                except (json.JSONDecodeError, KeyError):
+                    error_message = response.text
+                raise ProviderError(f"Anthropic API returned an error: {error_message}")
             
             for line in response.iter_lines():
                 if line:
@@ -443,11 +624,17 @@ class AnthropicProvider(Provider):
                                 full_content += text
                         except (json.JSONDecodeError, KeyError):
                             continue
-        except Exception:
-            pass
+        except requests.exceptions.Timeout:
+            raise ProviderError(f"Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})")
+        except requests.exceptions.ConnectionError:
+            raise ProviderError(f"Could not connect to Anthropic at {self.base_url}. Is it reachable?")
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e))
 
     def _get_api_key(self) -> str:
-        return ""
+        return os.getenv("ANTHROPIC_API_KEY", "")
 
     @classmethod
     def get_available_models(cls, base_url: str = None, api_key: str = None) -> list[str]:
@@ -469,29 +656,19 @@ class AnthropicProvider(Provider):
             return []
 
     @classmethod
-    def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
+    def supports_tools(cls, base_url: str = None, model: str = None, api_key: str = None) -> bool:
         """Anthropic models support tool calling via beta headers."""
         return True
 
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/messages"
         
-        anthropic_messages = []
-        if history:
-            for msg in history:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    anthropic_messages.append({"role": "user", "content": content})
-                elif role == "assistant":
-                    anthropic_messages.append({"role": "assistant", "content": content})
-        
-        anthropic_messages.append({"role": "user", "content": query})
+        anthropic_messages = _build_anthropic_messages(history, query)
 
         payload = {
             "model": self.model,
             "messages": anthropic_messages,
-            "max_tokens": 1024,
+            "max_tokens": effective_max_tokens_for_anthropic(self.max_tokens),
             "stream": False
         }
         
@@ -499,7 +676,7 @@ class AnthropicProvider(Provider):
             payload["system"] = system_prompt
         
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             for tool in tools:
                 formatted_tool = format_for_openai(tool)
                 anthropic_tool = {
@@ -519,7 +696,7 @@ class AnthropicProvider(Provider):
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers)
+            response = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT)
             
             if response.status_code == 401:
                 return {"content": "Error: Invalid Anthropic API key. Please check your configuration.", "tool_calls": []}
@@ -561,6 +738,8 @@ class AnthropicProvider(Provider):
             
             return {"content": final_content, "tool_calls": normalized_tool_calls}
             
+        except requests.exceptions.Timeout:
+            return {"content": f"Error: Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})", "tool_calls": []}
         except requests.exceptions.ConnectionError:
             return {"content": f"Error: Could not connect to Anthropic at {self.base_url}. Is it reachable?", "tool_calls": []}
         except Exception as e:
@@ -571,17 +750,21 @@ class ChatGPTProvider(Provider):
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     DEFAULT_MODEL = "gpt-4"
 
-    def __init__(self, base_url: str = None, model: str = None, api_key: str = None):
+    def __init__(self, base_url: str = None, model: str = None, api_key: str = None, max_tokens: Any = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
         self.api_key = api_key or self._get_api_key()
+        self.max_tokens = max_tokens
+        self._tool_support_cache: Optional[bool] = None
+
+    def _supports_tools_cached(self) -> bool:
+        if self._tool_support_cache is None:
+            self._tool_support_cache = self.__class__.supports_tools(self.base_url, self.model, api_key=self.api_key)
+        return self._tool_support_cache
 
     def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
         url = f"{self.base_url}/chat/completions"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -591,7 +774,7 @@ class ChatGPTProvider(Provider):
         }
 
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -599,19 +782,28 @@ class ChatGPTProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["max_tokens"] = _mt
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "content-type": "application/json"
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers, stream=True)
+            response = requests.post(url, json=payload, headers=headers, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
             
             if response.status_code == 401:
-                return
+                raise ProviderError("Invalid ChatGPT API key. Please check your configuration.")
             
             if response.status_code >= 400:
-                return
+                try:
+                    error_data = response.json()
+                    error_message = str(error_data.get("error", {}).get("message", ""))
+                except (json.JSONDecodeError, KeyError):
+                    error_message = response.text
+                raise ProviderError(f"ChatGPT API returned an error: {error_message}")
             
             for line in response.iter_lines():
                 if line:
@@ -629,11 +821,17 @@ class ChatGPTProvider(Provider):
                                 yield content
                         except (json.JSONDecodeError, IndexError):
                             continue
-        except Exception:
-            pass
+        except requests.exceptions.Timeout:
+            raise ProviderError(f"Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})")
+        except requests.exceptions.ConnectionError:
+            raise ProviderError(f"Could not connect to ChatGPT at {self.base_url}. Is it reachable?")
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e))
 
     def _get_api_key(self) -> str:
-        return ""
+        return os.getenv("OPENAI_API_KEY", "")
 
     @classmethod
     def get_available_models(cls, base_url: str = None, api_key: str = None) -> list[str]:
@@ -654,7 +852,7 @@ class ChatGPTProvider(Provider):
             return []
 
     @classmethod
-    def supports_tools(cls, base_url: str = None, model: str = None) -> bool:
+    def supports_tools(cls, base_url: str = None, model: str = None, api_key: str = None) -> bool:
         """Check if the model supports tool calling by testing with a simple request."""
         try:
             test_base_url = (base_url or cls.DEFAULT_BASE_URL).rstrip("/")
@@ -676,7 +874,7 @@ class ChatGPTProvider(Provider):
             url = f"{test_base_url}/chat/completions"
             response = requests.post(
                 url,
-                headers={"Authorization": f"Bearer test"},
+                headers={"Authorization": f"Bearer {api_key or ''}"},
                 json=payload,
                 timeout=10
             )
@@ -691,10 +889,7 @@ class ChatGPTProvider(Provider):
 
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/chat/completions"
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages = _build_openai_messages(system_prompt, history, query)
 
         payload = {
             "model": self.model,
@@ -704,7 +899,7 @@ class ChatGPTProvider(Provider):
         }
 
         effective_tools = []
-        if tools and self.supports_tools(self.base_url, self.model):
+        if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
         elif tools:
             print(f"Warning: Model '{self.model}' does not support native tool calling. Tools will be ignored.", file=sys.stderr)
@@ -712,13 +907,17 @@ class ChatGPTProvider(Provider):
         if effective_tools:
             payload["tools"] = effective_tools
 
+        _mt = resolve_max_tokens(self.max_tokens)
+        if _mt is not None:
+            payload["max_tokens"] = _mt
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "content-type": "application/json"
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers)
+            response = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT)
             
             if response.status_code == 401:
                 return {"content": "Error: Invalid ChatGPT API key. Please check your configuration.", "tool_calls": []}
@@ -743,6 +942,8 @@ class ChatGPTProvider(Provider):
                 return {"content": f"Error: {error}", "tool_calls": []}
             return {"content": content, "tool_calls": tool_calls}
             
+        except requests.exceptions.Timeout:
+            return {"content": f"Error: Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})", "tool_calls": []}
         except requests.exceptions.ConnectionError:
             return {"content": f"Error: Could not connect to ChatGPT at {self.base_url}. Is it reachable?", "tool_calls": []}
         except Exception as e:

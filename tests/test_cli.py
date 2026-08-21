@@ -119,10 +119,10 @@ def test_main_interactive_mode_with_tool_calls(mock_input, mock_get_provider, mo
     mock_get_provider.return_value = mock_provider
 
     with patch('ask.cli.console.print') as mock_rich_print, \
-         patch('ask.cli.execute_tool_calls') as mock_execute:
-        mock_execute.return_value = ("success", "")
+         patch('ask.cli._build_tool_result_messages') as mock_build:
+        mock_build.return_value = [{"role": "tool", "tool_call_id": "call_0_test_tool", "content": "success"}]
         main()
-        assert mock_execute.called
+        assert mock_build.called
 
 
 @patch('ask.cli.Config')
@@ -143,18 +143,17 @@ def test_main_tool_synthesis_keeps_original_context(mock_get_provider, mock_conf
     ]
     mock_get_provider.return_value = mock_provider
 
-    with patch('ask.cli.execute_tool_calls', return_value=('sunny', '')):
+    with patch('ask.cli._build_tool_result_messages', return_value=[{"role": "tool", "tool_call_id": "call_0_get_weather", "content": "sunny"}]):
         main()
 
-    mock_provider.chat.assert_any_call(
-        "Tool execution results:\nsunny",
-        system_prompt="",
-        history=[
-            {"role": "user", "content": "weather in Paris"},
-            {"role": "assistant", "content": "Checking the weather."},
-        ],
-        tools=[],
-    )
+    # Native protocol: tool result is sent as role:tool with id, not as fake user message
+    assert mock_provider.chat.call_count == 2
+    second_call_kwargs = mock_provider.chat.call_args_list[1][1]
+    assert second_call_kwargs["history"][0] == {"role": "user", "content": "weather in Paris"}
+    assert second_call_kwargs["history"][1]["role"] == "assistant"
+    assert second_call_kwargs["history"][1]["tool_calls"][0]["name"] == "get_weather"
+    assert second_call_kwargs["history"][2]["role"] == "tool"
+    assert "sunny" in second_call_kwargs["history"][2]["content"]
 
 
 @patch('ask.cli.Config')

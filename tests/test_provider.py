@@ -79,6 +79,7 @@ def test_ollama_provider_normalizes_native_tool_calls():
     assert response["tool_calls"] == [{
         "name": "get_weather",
         "arguments": {"city": "Paris"},
+        "id": "call-1",
     }]
 
 

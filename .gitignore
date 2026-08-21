@@ -2,3 +2,10 @@
 build/
 *.egg-info/
 dist/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/

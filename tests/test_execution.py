@@ -54,7 +54,7 @@ def test_execute_tool_calls_success(mock_run):
     mock_result.stdout = '{"temp": 72}\n'
     mock_run.return_value = mock_result
     
-    output, error = execute_tool_calls(tool_calls, tools)
+    output, error = execute_tool_calls(tool_calls, tools, auto_confirm=True)
     
     assert error == ""
     assert "Tool get_weather executed successfully" in output
@@ -69,6 +69,7 @@ def test_execute_tool_calls_resolves_relative_script_path(mock_run):
     output, error = execute_tool_calls(
         [{"name": "get_weather", "arguments": {"city": "Paris"}}],
         [{"name": "get_weather", "_file_path": "test_sample_tool.py"}],
+        auto_confirm=True,
     )
 
     assert error == ""
@@ -86,6 +87,7 @@ def test_execute_tool_calls_runs_typescript_with_node(mock_run):
     output, error = execute_tool_calls(
         [{"name": "get_weather", "arguments": {"city": "Paris"}}],
         [{"name": "get_weather", "_file_path": "weather.ts"}],
+        auto_confirm=True,
     )
 
     assert error == ""
@@ -116,7 +118,7 @@ def test_execute_tool_calls_failure(mock_run):
     mock_result.stderr = 'Tool failed'
     mock_run.return_value = mock_result
     
-    output, error = execute_tool_calls(tool_calls, tools)
+    output, error = execute_tool_calls(tool_calls, tools, auto_confirm=True)
     
     assert "Error executing tool get_weather" in error
 
@@ -135,7 +137,7 @@ def test_execute_tool_calls_unknown_tool():
         }
     ]
     
-    output, error = execute_tool_calls(tool_calls, tools)
+    output, error = execute_tool_calls(tool_calls, tools, auto_confirm=True)
     
     assert "Unknown tool unknown_tool" in error
 
@@ -175,7 +177,7 @@ def test_execute_tool_calls_multiple(mock_run):
     
     mock_run.side_effect = side_effect
     
-    output, error = execute_tool_calls(tool_calls, tools)
+    output, error = execute_tool_calls(tool_calls, tools, auto_confirm=True)
     
     assert error == ""
     assert "tool1" in output
