@@ -4,7 +4,7 @@ import re
 import questionary
 import subprocess
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
@@ -161,8 +161,11 @@ def main():
     config = Config()
     
     if args.config_model:
-        reconfigure_provider(config)
-        console.print("[bold green]Configuration updated![/bold green]")
+        updated = configure_provider(config)
+        if updated:
+            console.print("[bold green]Configuration updated![/bold green]")
+        else:
+            console.print("[bold yellow]Configuration unchanged.[/bold yellow]")
         sys.exit(0)
     
     if args.show_config:
@@ -176,37 +179,10 @@ def main():
             tools[i]["_file_path"] = args.tools
 
     if not config.exists():
-        provider_choice = questionary.select(
-            "Choose a provider:",
-            choices=["mock", "ollama", "lmstudio", "anthropic", "chatgpt"]
-        ).ask()
-        
-        config.set("provider", provider_choice)
-
-        if provider_choice == "ollama":
-            models = OllamaProvider.get_available_models()
-            if models:
-                model = questionary.select(
-                    "Choose an Ollama model:",
-                    choices=models
-                ).ask()
-                config.set("ollama_model", model)
-        elif provider_choice == "lmstudio":
-            models = LMStudioProvider.get_available_models()
-            if models:
-                model = questionary.select(
-                    "Choose an LM Studio model:",
-                    choices=models
-                ).ask()
-                config.set("lmStudio_model", model)
-        elif provider_choice == "anthropic":
-            print("Please configure your Anthropic API key:")
-            api_key = input("API Key: ")
-            config.set("anthropic_api_key", api_key)
-        elif provider_choice == "chatgpt":
-            print("Please configure your ChatGPT API key:")
-            api_key = input("API Key: ")
-            config.set("chatgpt_api_key", api_key)
+        updated = configure_provider(config)
+        if not updated:
+            console.print("[bold yellow]Setup cancelled.[/bold yellow]")
+            sys.exit(0)
 
     query = " ".join(args.query) if args.query else None
     if not query and not args.it:
@@ -316,42 +292,84 @@ def main():
             handle_response(final_response, args.command, already_rendered=already_rendered)
 
 
-def reconfigure_provider(config: Config):
-    provider_choice = questionary.select(
+_PROVIDER_CHOICES = ["mock", "ollama", "lmstudio", "anthropic", "chatgpt"]
+
+
+def _select_provider(current_provider: Optional[str] = None) -> Optional[str]:
+    kwargs: Dict[str, Any] = {}
+    if current_provider in _PROVIDER_CHOICES:
+        kwargs["default"] = current_provider
+    return questionary.select(
         "Choose a provider:",
-        choices=["mock", "ollama", "lmstudio", "anthropic", "chatgpt"]
+        choices=_PROVIDER_CHOICES,
+        **kwargs
     ).ask()
-    
+
+
+def _select_model(prompt: str, models: List[str], current_model: Optional[str] = None) -> Optional[str]:
+    kwargs: Dict[str, Any] = {}
+    if current_model and current_model in models:
+        kwargs["default"] = current_model
+    return questionary.select(prompt, choices=models, **kwargs).ask()
+
+
+def configure_provider(config: Config) -> bool:
+    """One shared provider-setup flow used by both first-run bootstrap and -M reconfigure.
+
+    Returns True if any configuration was saved, False if cancelled at the provider prompt.
+
+    Cancel-safe:
+    - If provider prompt returns None (Ctrl+C), zero config.set calls are made.
+    - If model prompt returns None, provider update still applies but model is unchanged.
+    Preselects current provider/model when available.
+    Warns when local model discovery fails (both entry points).
+    """
+    current_provider = config.get("provider", None) if config.exists() else None
+    if current_provider not in _PROVIDER_CHOICES:
+        current_provider = None
+    provider_choice = _select_provider(current_provider)
+    if provider_choice is None:
+        return False
     config.set("provider", provider_choice)
 
     if provider_choice == "ollama":
         models = OllamaProvider.get_available_models()
         if models:
-            model = questionary.select(
-                "Choose an Ollama model:",
-                choices=models
-            ).ask()
-            config.set("ollama_model", model)
+            current_model = config.get("ollama_model", None)
+            model = _select_model("Choose an Ollama model:", models, current_model)
+            if model is not None:
+                config.set("ollama_model", model)
         else:
             console.print("[bold yellow]Could not fetch Ollama models. Please make sure Ollama is running.[/bold yellow]")
     elif provider_choice == "lmstudio":
         models = LMStudioProvider.get_available_models()
         if models:
-            model = questionary.select(
-                "Choose an LM Studio model:",
-                choices=models
-            ).ask()
-            config.set("lmStudio_model", model)
+            current_model = config.get("lmStudio_model", None)
+            model = _select_model("Choose an LM Studio model:", models, current_model)
+            if model is not None:
+                config.set("lmStudio_model", model)
         else:
             console.print("[bold yellow]Could not fetch LM Studio models. Please make sure LM Studio is running.[/bold yellow]")
     elif provider_choice == "anthropic":
         print("Please configure your Anthropic API key:")
-        api_key = input("API Key: ")
+        try:
+            api_key = input("API Key: ")
+        except (EOFError, KeyboardInterrupt):
+            return True
         config.set("anthropic_api_key", api_key)
     elif provider_choice == "chatgpt":
         print("Please configure your ChatGPT API key:")
-        api_key = input("API Key: ")
+        try:
+            api_key = input("API Key: ")
+        except (EOFError, KeyboardInterrupt):
+            return True
         config.set("chatgpt_api_key", api_key)
+    return True
+
+
+def reconfigure_provider(config: Config) -> bool:
+    """Backward-compatible wrapper for the shared flow."""
+    return configure_provider(config)
 
 
 def show_config(config: Config):
