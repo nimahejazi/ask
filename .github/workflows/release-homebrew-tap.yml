@@ -1,0 +1,68 @@
+name: Release Homebrew Tap
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Get version from tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Tag $TAG -> version $VERSION"
+
+      - name: Checkout homebrew-tap (main branch)
+        uses: actions/checkout@v5
+        with:
+          repository: nimahejazi/homebrew-tap
+          ref: main
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Download source tarball and compute SHA256
+        id: sha256
+        run: |
+          curl -L "https://github.com/nimahejazi/ask/archive/refs/tags/v${{ steps.version.outputs.VERSION }}.tar.gz" -o /tmp/ask.tar.gz
+          SHA256=$(shasum -a 256 /tmp/ask.tar.gz | cut -d' ' -f1)
+          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
+          echo "SHA256=$SHA256"
+
+      - name: Update formula version and checksum
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          SHA256: ${{ steps.sha256.outputs.SHA256 }}
+        run: |
+          cd tap
+          echo "Before:"
+          grep -E 'url "https://github.com/nimahejazi/ask|sha256' nh-ask-cli.rb | head -5
+          # Only update the top-level url (ask archive), not resource urls
+          sed -i.bak "s|\(url \"https://github.com/nimahejazi/ask/archive/refs/tags/v\)[0-9]*\.[0-9]*\.[0-9]*|\1${VERSION}|" nh-ask-cli.rb
+          # Only replace first sha256 (top-level) - resources must keep their own hashes
+          # Use ed-like approach: replace first occurrence only
+          awk -v sha="$SHA256" 'BEGIN{done=0} /sha256 "/ && done==0 {sub(/sha256 "[a-f0-9]*"/, "sha256 \"" sha "\""); done=1} {print}' nh-ask-cli.rb > nh-ask-cli.rb.tmp && mv nh-ask-cli.rb.tmp nh-ask-cli.rb
+          rm -f nh-ask-cli.rb.bak
+          echo "After:"
+          grep -E 'url "https://github.com/nimahejazi/ask|sha256' nh-ask-cli.rb | head -5
+          rm -f /tmp/ask.tar.gz
+
+      - name: Commit and push to homebrew-tap
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add nh-ask-cli.rb
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "chore: bump nh-ask-cli to v${{ steps.version.outputs.VERSION }}"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit"
+          fi
