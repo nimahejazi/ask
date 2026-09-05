@@ -40,7 +40,34 @@ ask -c "List files in current directory"
 
 # With tools
 ask -t ./tools.sh "Do something with tools"
+
+# Notes
+ask notes                       # interactive browser (list, view, edit, delete)
+ask notes add "Deploy Checklist\nrun kubectl first #ops"
+ask notes list [--tag ops]
+ask notes show deploy-checklist
+ask notes edit deploy-checklist      # opens $EDITOR
+ask notes delete deploy-checklist
+ask notes search "kubectl rollout"
+ask notes reindex
 ```
+
+## Notes
+
+`ask` keeps personal notes (`~/.ask-notes/*.md`, plain markdown — title is the first
+line, inline `#tags` allowed anywhere) and consults them when answering questions:
+
+- **Default on**: every query gets `search_notes` / `read_note` / `save_note` tools,
+  so the assistant can look up a relevant note, cite it as
+  `[note: Title](file://path)`, and save new notes when you ask it to.
+  Use `--no-notes` to skip notes for a query. AI cannot delete notes — use
+  `ask notes delete`.
+- **Semantic search**: notes are embedded with your provider's embedding endpoint
+  (ollama: `nomic-embed-text` — offered at setup; ChatGPT: `text-embedding-3-small`;
+  LM Studio: its loaded embedding model). Providers without embeddings (Anthropic,
+  Mock) fall back to keyword search automatically.
+- **Files are the source of truth**: edit `~/.ask-notes/*.md` by hand anytime;
+  the index rebuilds lazily (or force one with `ask notes reindex`).
 
 ## Configuration
 

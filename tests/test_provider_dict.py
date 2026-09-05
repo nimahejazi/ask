@@ -85,4 +85,6 @@ def test_ollama_provider_missing_message(ollama_provider):
         response = ollama_provider.chat("test")
         
         assert isinstance(response, dict)
-        assert response["content"] == ""
+        # Missing message -> guarded error content, never silent empty
+        assert response["content"].startswith("Error:")
+        assert response["tool_calls"] == []

@@ -76,8 +76,12 @@ def effective_max_tokens_for_anthropic(raw: Any, warn: bool = True) -> int:
     return validated if validated is not None else 1024
 
 
-def _build_openai_messages(system_prompt: str, history: Optional[list[dict]], query: str) -> list[dict]:
-    """Build messages for OpenAI-compatible APIs, handling native tool protocol."""
+def _build_openai_messages(system_prompt: str, history: Optional[list[dict]], query: str, tool_arguments_as_object: bool = False) -> list[dict]:
+    """Build messages for OpenAI-compatible APIs, handling native tool protocol.
+
+    tool_arguments_as_object=True (Ollama) sends tool_calls arguments as a JSON
+    object; the OpenAI wire format (LM Studio, ChatGPT) expects a JSON string.
+    """
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         for msg in history:
@@ -86,12 +90,15 @@ def _build_openai_messages(system_prompt: str, history: Optional[list[dict]], qu
                 converted_calls = []
                 for idx, tc in enumerate(msg["tool_calls"]):
                     tc_id = tc.get("id") or f"call_{idx}_{tc.get('name','')}"
+                    arguments = tc.get("arguments", {})
+                    if not tool_arguments_as_object:
+                        arguments = json.dumps(arguments)
                     converted_calls.append({
                         "id": tc_id,
                         "type": "function",
                         "function": {
                             "name": tc.get("name", ""),
-                            "arguments": json.dumps(tc.get("arguments", {})),
+                            "arguments": arguments,
                         }
                     })
                 messages.append({
@@ -185,10 +192,12 @@ class OllamaProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_MODEL = "llama3"
 
-    def __init__(self, base_url: str = None, model: str = None, max_tokens: Any = None):
+    def __init__(self, base_url: str = None, model: str = None, max_tokens: Any = None, think: Any = None):
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = max_tokens
+        # think=None: omit (server default); think=False: send think:false
+        self.think = think
         self._tool_support_cache: Optional[bool] = None
 
     def _supports_tools_cached(self) -> bool:
@@ -198,14 +207,15 @@ class OllamaProvider(Provider):
 
     def chat_stream(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> Iterator[str]:
         url = f"{self.base_url}/api/chat"
-        messages = _build_openai_messages(system_prompt, history, query)
+        messages = _build_openai_messages(system_prompt, history, query, tool_arguments_as_object=True)
 
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": True
         }
-        
+        if self.think is False:
+            payload["think"] = False
         effective_tools = []
         if tools and self._supports_tools_cached():
             effective_tools = [format_for_openai(t) for t in tools]
@@ -224,6 +234,7 @@ class OllamaProvider(Provider):
             response.raise_for_status()
             
             full_content = ""
+            full_thinking = ""
             for line in response.iter_lines():
                 if line:
                     line_str = line.decode('utf-8')
@@ -231,6 +242,7 @@ class OllamaProvider(Provider):
                         chunk = json.loads(line_str)
                         message = chunk.get("message", {})
                         content = message.get("content", "")
+                        full_thinking += message.get("thinking", "")
                         if content:
                             yield content
                         full_content += content
@@ -239,6 +251,11 @@ class OllamaProvider(Provider):
                             break
                     except json.JSONDecodeError:
                         continue
+            # Thinking models may put the whole answer in `thinking` with empty
+            # content (observed on Qwen3 via Ollama). Surface it rather than
+            # rendering nothing.
+            if not full_content and full_thinking and not tools:
+                yield full_thinking
         except requests.exceptions.Timeout:
             raise ProviderError(f"Endpoint did not respond in {DEFAULT_REQUEST_TIMEOUT}s ({self.base_url})")
         except requests.exceptions.ConnectionError:
@@ -301,13 +318,15 @@ class OllamaProvider(Provider):
 
     def chat(self, query: str, system_prompt: str = "", history: list[dict] = None, tools: List[Dict[str, Any]] = None) -> dict:
         url = f"{self.base_url}/api/chat"
-        messages = _build_openai_messages(system_prompt, history, query)
+        messages = _build_openai_messages(system_prompt, history, query, tool_arguments_as_object=True)
 
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": False
         }
+        if self.think is False:
+            payload["think"] = False
         
         effective_tools = []
         if tools and self._supports_tools_cached():
@@ -344,6 +363,19 @@ class OllamaProvider(Provider):
                 message = data.get("message", {})
                 content = message.get("content", "")
                 tool_calls = normalize_tool_calls(message.get("tool_calls", []))
+                if not content and not tool_calls:
+                    # Thinking models may put the whole answer in `thinking`
+                    # (observed on Qwen3 via Ollama). Surface it rather than
+                    # rendering nothing.
+                    thinking = message.get("thinking", "")
+                    if thinking:
+                        content = thinking
+                    else:
+                        content = (
+                            "Error: Model returned an empty response "
+                            "(no content, no thinking, no tool calls). "
+                            "Try again or check the model."
+                        )
                 return {"content": content, "tool_calls": tool_calls}
             except json.JSONDecodeError:
                 pass

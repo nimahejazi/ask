@@ -3,6 +3,14 @@ from unittest.mock import patch, MagicMock
 import sys
 from ask.cli import main, extract_command, get_version, get_version
 
+
+@pytest.fixture(autouse=True)
+def no_ambient_notes(tmp_path, monkeypatch):
+    """Keep notes-feature state out of legacy CLI tests: no notes dir, no index."""
+    monkeypatch.setattr("ask.notes.DEFAULT_NOTES_DIR", tmp_path / "notes-empty")
+    monkeypatch.setattr("ask.notes_index.DEFAULT_DB_PATH", tmp_path / "notes-empty" / ".index.db")
+    yield
+
 def test_extract_command_with_code_block():
     text = "Here is the command:\n```bash\nls -la\n```"
     assert extract_command(text) == "ls -la"
