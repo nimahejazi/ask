@@ -325,8 +325,6 @@ def main():
     notes_idx = _find_notes_dispatch(sys.argv[1:])
     if notes_idx is not None:
         rest = sys.argv[1:][notes_idx + 1:]
-        if rest and rest[0] in ("-h", "--help"):
-            notes_command([])
         sys.exit(notes_command(rest))
     args, remaining = parser.parse_known_args()
 
