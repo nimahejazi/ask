@@ -41,6 +41,12 @@ ask -c "List files in current directory"
 # With tools
 ask -t ./tools.sh "Do something with tools"
 
+# Notes-only mode (answer strictly from your personal notes)
+ask -n "what's six sigma DMIAC?"
+
+# Skip notes for this query
+ask -N "What is the capital of France?"
+
 # Notes
 ask notes                       # interactive browser (list, view, edit, delete)
 ask notes add "Deploy Checklist\nrun kubectl first #ops"
@@ -60,8 +66,10 @@ line, inline `#tags` allowed anywhere) and consults them when answering question
 - **Default on**: every query gets `search_notes` / `read_note` / `save_note` tools,
   so the assistant can look up a relevant note, cite it as
   `[note: Title](file://path)`, and save new notes when you ask it to.
-  Use `--no-notes` to skip notes for a query. AI cannot delete notes — use
-  `ask notes delete`.
+  Use `-N/--no-notes` to skip notes for a query, or `-n/--notes-only` to answer
+  strictly from notes (no general knowledge). AI cannot delete notes — use
+  `ask notes delete`. Read-only note tools run without confirmation; `save_note`
+  still asks.
 - **Semantic search**: notes are embedded with your provider's embedding endpoint
   (ollama: `nomic-embed-text` — offered at setup; ChatGPT: `text-embedding-3-small`;
   LM Studio: its loaded embedding model). Providers without embeddings (Anthropic,
