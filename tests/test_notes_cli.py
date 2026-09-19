@@ -144,10 +144,11 @@ def test_notes_list_tag_filter(env, capsys):
     _write_config(env)
     cli.main_with_args(["ask", "notes", "add", "Alpha\nbody #ops"])
     cli.main_with_args(["ask", "notes", "add", "Beta\nbody #baking"])
-    rc = cli.main_with_args(["ask", "notes", "list", "--tag", "ops"])
+    rc = cli.main_with_args(["ask", "notes", "list", "#ops"])
     out = capsys.readouterr().out
+    assert rc == 0
     assert "Alpha" in out
-    assert "Beta" not in out.split("Mock response")[0] or "Mock response to: --tag" in out
+    assert "Beta" not in out
 
 
 def test_query_attaches_notes_tools_by_default(env, capsys, monkeypatch):

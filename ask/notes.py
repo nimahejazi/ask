@@ -103,7 +103,9 @@ class NotesStore:
                 notes.append(Note(f, f.read_text(encoding="utf-8"), stat.st_mtime))
             except OSError:
                 continue
-        notes.sort(key=lambda n: n.updated, reverse=True)
+        # mtime descending, ties broken by path so ordering is deterministic
+        # even when files share a timestamp (coarse mtime granularity)
+        notes.sort(key=lambda n: (-n.updated, n.path.name))
         return notes
 
     def read(self, path: Path) -> str:
