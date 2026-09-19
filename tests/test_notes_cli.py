@@ -372,3 +372,127 @@ def test_notes_add_editor_content_not_escaped_decoded(env, capsys, monkeypatch):
     store = default_notes_store()
     note = store.list_notes()[0]
     assert "\\n" in note.content  # literal backslash-n preserved
+
+
+def test_notes_only_attaches_exactly_notes_tools(env, capsys, monkeypatch):
+    """--notes-only attaches exactly the 3 built-in notes tools."""
+    _write_config(env, provider="mock")
+    cli.main_with_args(["ask", "notes", "add", "Deploy\nrun kubectl first #ops"])
+    captured = {}
+
+    def fake_chat(self, query, system_prompt="", history=None, tools=None):
+        captured["tools"] = tools
+        captured["system_prompt"] = system_prompt
+        return {"content": "answer", "tool_calls": []}
+
+    monkeypatch.setattr("ask.provider.MockProvider.chat", fake_chat)
+    rc = cli.main_with_args(["ask", "--notes-only", "how do I deploy?"])
+    assert rc == 0
+    names = sorted(t["name"] for t in (captured["tools"] or []))
+    assert names == ["read_note", "save_note", "search_notes"]
+    assert "ONLY from the user's personal notes" in captured["system_prompt"]
+    assert "Notes-only mode" in captured["system_prompt"]
+
+
+def test_notes_only_ignores_user_tools_with_warning(env, capsys, monkeypatch, tmp_path):
+    """-t alongside --notes-only: user tools dropped, warning printed."""
+    _write_config(env, provider="mock")
+    cli.main_with_args(["ask", "notes", "add", "Deploy\nrun kubectl first #ops"])
+    toolfile = tmp_path / "tools.py"
+    toolfile.write_text(
+        'TOOLS = [{"name": "user_tool", "description": "d", "parameters": {}}]\n'
+    )
+    captured = {}
+
+    def fake_chat(self, query, system_prompt="", history=None, tools=None):
+        captured["tools"] = tools
+        return {"content": "answer", "tool_calls": []}
+
+    monkeypatch.setattr("ask.provider.MockProvider.chat", fake_chat)
+    rc = cli.main_with_args(["ask", "--notes-only", "-t", str(toolfile), "q"])
+    assert rc == 0
+    names = sorted(t["name"] for t in (captured["tools"] or []))
+    assert names == ["read_note", "save_note", "search_notes"]
+    err = capsys.readouterr().err
+    assert "Ignoring -t/--tools" in err
+
+
+def test_notes_only_mutually_exclusive_with_no_notes(env, capsys):
+    _write_config(env, provider="mock")
+    rc = cli.main_with_args(["ask", "--no-notes", "--notes-only", "q"])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "not allowed with" in err
+
+
+def test_notes_only_requires_notes(env, capsys):
+    """--notes-only with an empty notes store errors cleanly."""
+    _write_config(env, provider="mock")
+    rc = cli.main_with_args(["ask", "--notes-only", "q"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "No notes found" in err
+
+
+def test_notes_only_tool_loop_searches(env, capsys, monkeypatch):
+    """Under --notes-only the model can call search_notes and get results."""
+    _write_config(env, provider="mock")
+    cli.main_with_args(["ask", "notes", "add", "Deploy\nrun kubectl first #ops"])
+    calls = iter([
+        {"content": "", "tool_calls": [{"name": "search_notes", "arguments": {"query": "deploy"}}]},
+        {"content": "answer from notes", "tool_calls": []},
+    ])
+
+    def fake_chat(self, query, system_prompt="", history=None, tools=None):
+        return next(calls)
+
+    monkeypatch.setattr("ask.provider.MockProvider.chat", fake_chat)
+    monkeypatch.setattr(cli, "execute_built_in_tool", lambda name, args, config=None: (json.dumps({"ok": True}), ""))
+    rc = cli.main_with_args(["ask", "--notes-only", "how do I deploy?"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "answer from notes" in out
+
+
+def test_read_only_note_tools_skip_confirmation(env, capsys, monkeypatch):
+    """search_notes/read_note run without prompting; user tools still prompt."""
+    _write_config(env, provider="mock")
+    cli.main_with_args(["ask", "notes", "add", "Deploy\nkubectl #ops"])
+    prompted = []
+
+    def fail_input(prompt=""):
+        prompted.append(prompt)
+        raise AssertionError("should not prompt for read-only notes tools")
+
+    monkeypatch.setattr("builtins.input", fail_input)
+    monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": lambda self: True})())
+    rc = cli.main_with_args(["ask", "how do I deploy?"])
+    assert rc == 0
+    assert prompted == []
+
+
+def test_save_note_still_prompts(env, capsys, monkeypatch):
+    """save_note is a write: it must still ask, and a decline reaches the model."""
+    _write_config(env, provider="mock")
+    answers = iter(["n"])
+
+    def fake_input(prompt=""):
+        return next(answers)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": lambda self: True})())
+    calls = iter([
+        {"content": "", "tool_calls": [{"name": "save_note", "arguments": {"title": "T", "content": "T\nb"}}]},
+        {"content": "noted the decline", "tool_calls": []},
+    ])
+
+    def fake_chat(self, query, system_prompt="", history=None, tools=None):
+        return next(calls)
+
+    monkeypatch.setattr("ask.provider.MockProvider.chat", fake_chat)
+    rc = cli.main_with_args(["ask", "remember this"])
+    assert rc == 0
+    from ask.notes import default_notes_store
+    assert default_notes_store().find_by_title("T") is None
+    out = capsys.readouterr().out
+    assert "noted the decline" in out

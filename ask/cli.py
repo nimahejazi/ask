@@ -42,8 +42,11 @@ from ask.notes_tools import (
     NOTES_TOOLS,
     execute_built_in_tool,
     filter_built_in_tools,
+    notes_only_guidance,
     notes_system_guidance,
 )
+
+READ_ONLY_NOTE_TOOLS = ("search_notes", "read_note")
 from ask.notes_index import (
     DEFAULT_EMBEDDING_MODEL,
     ollama_has_embedding_model,
@@ -73,6 +76,9 @@ def execute_built_in_tool_with_confirmation(tool_name: str, args: dict, auto_con
                 return "", f"Tool {tool_name} execution declined by user."
         except (EOFError, KeyboardInterrupt):
             return "", f"Tool {tool_name} execution declined by user."
+    if tool_name == "search_notes":
+        with console.status("Searching notes…"):
+            return execute_built_in_tool(tool_name, args)
     return execute_built_in_tool(tool_name, args)
 
 def _resolve_api_key(config: Config, config_key: str, env_var: str) -> str:
@@ -162,7 +168,9 @@ def stream_response(provider: 'Provider', query: str, system_prompt: str = "", h
     return {"content": full_content, "tool_calls": []}
 
 def _confirm_tool_execution(tool_name: str, args: dict, auto_confirm: bool = False) -> bool:
-    if auto_confirm:
+    # Read-only built-in notes tools never prompt: AI reads freely, humans
+    # gate writes (save_note) and user-provided tools.
+    if auto_confirm or tool_name in READ_ONLY_NOTE_TOOLS:
         return True
     # Non-interactive stdin: treat as decline unless -y
     if not sys.stdin.isatty():
@@ -266,7 +274,8 @@ def _run_tool_loop(provider: Provider, history: list[dict], tools: list, system_
         history.extend(tool_results)
         # Call provider again with updated history; no new user query
         try:
-            next_response = provider.chat("", system_prompt=system_prompt, history=list(history), tools=tools)
+            with console.status(" "):
+                next_response = provider.chat("", system_prompt=system_prompt, history=list(history), tools=tools)
         except ProviderError as e:
             print(str(e), file=sys.stderr)
             return {"content": str(e), "tool_calls": [], "is_error": True}
@@ -319,7 +328,9 @@ def main():
     parser.add_argument('-M', '--config-model', action='store_true', help='Reconfigure provider and model settings')
     parser.add_argument('-S', '--show-config', action='store_true', help='Show current configuration')
     parser.add_argument('-y', '--yes', action='store_true', help='Auto-confirm tool execution without prompting')
-    parser.add_argument('--no-notes', action='store_true', help='Disable consulting personal notes for this query')
+    notes_group = parser.add_mutually_exclusive_group()
+    notes_group.add_argument('-N', '--no-notes', action='store_true', help='Disable consulting personal notes for this query')
+    notes_group.add_argument('-n', '--notes-only', action='store_true', help='Answer ONLY from your personal notes (requires notes to exist)')
     # `ask notes ...` must dispatch before main parsing (main's query positional
     # swallows the words, and main's -h/--help would short-circuit notes help)
     notes_idx = _find_notes_dispatch(sys.argv[1:])
@@ -347,9 +358,14 @@ def main():
     
     tools = []
     if args.tools:
-        tools = filter_built_in_tools(parse_tool_definitions(args.tools))
-        for i, tool in enumerate(tools):
-            tools[i]["_file_path"] = args.tools
+        if args.notes_only:
+            _err_console().print(
+                "[yellow]Ignoring -t/--tools: --notes-only uses only the built-in notes tools.[/yellow]"
+            )
+        else:
+            tools = filter_built_in_tools(parse_tool_definitions(args.tools))
+            for i, tool in enumerate(tools):
+                tools[i]["_file_path"] = args.tools
 
     if not config.exists():
         updated = configure_provider(config)
@@ -362,12 +378,20 @@ def main():
     # Notes Tools: attached by default when notes exist and not disabled.
     # Attaching tools switches to the non-streaming path (the model may call tools).
     notes_store = default_notes_store()
-    attach_notes = (
-        not args.no_notes
-        and bool(notes_store.list_notes())
-    )
-    if attach_notes:
+    if args.notes_only:
+        if not notes_store.list_notes():
+            _err_console().print(
+                "[red]No notes found. Create some first: ask notes add \"text\"[/red]"
+            )
+            sys.exit(1)
         tools = NOTES_TOOLS + tools
+    else:
+        attach_notes = (
+            not args.no_notes
+            and bool(notes_store.list_notes())
+        )
+        if attach_notes:
+            tools = NOTES_TOOLS + tools
 
     query = " ".join(args.query) if args.query else None
     if not query and not args.it:
@@ -381,7 +405,9 @@ def main():
         sys.exit(1)
 
     system_prompt = config.get("system_prompt", "")
-    if attach_notes:
+    if args.notes_only:
+        system_prompt = (system_prompt + "\n\n" + notes_only_guidance()).strip()
+    elif attach_notes:
         system_prompt = (system_prompt + "\n\n" + notes_system_guidance()).strip()
 
     # Only stream for real providers that have actual streaming implementations
@@ -429,7 +455,8 @@ def main():
                     if can_stream and not args.command and not tools:
                         response_dict = stream_response(provider, user_input, system_prompt=system_prompt, history=list(messages), tools=[])
                     else:
-                        response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
+                        with console.status(" "):
+                            response_dict = provider.chat(user_input, system_prompt=system_prompt, history=list(messages), tools=tools)
                 except ProviderError as e:
                     print(str(e), file=sys.stderr)
                     # In interactive mode, show error but keep session alive
@@ -473,7 +500,8 @@ def main():
         if can_stream and not args.command and not tools:
             response_dict = stream_response(provider, query, system_prompt=system_prompt, history=None, tools=[])
         else:
-            response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
+            with console.status(" "):
+                response_dict = provider.chat(query, system_prompt=system_prompt, tools=tools)
     except ProviderError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -768,7 +796,8 @@ def notes_command(argv):
             _err_console().print("[red]Usage: ask notes search <query>[/red]")
             return 1
         index = NotesIndex(notes_store=store)
-        results = index.search(args_text, provider=provider, config=config, top_k=5)
+        with console.status("Searching notes…"):
+            results = index.search(args_text, provider=provider, config=config, top_k=5)
         if not results:
             console.print("[yellow]No matching notes.[/yellow]")
             return 0

@@ -79,6 +79,19 @@ def notes_system_guidance() -> str:
     )
 
 
+def notes_only_guidance() -> str:
+    """Appended when --notes-only: the model must answer exclusively from notes."""
+    return (
+        "## Notes-only mode\n\n"
+        "Answer ONLY from the user's personal notes. Before answering, call "
+        "search_notes, then read_note on any promising result. Never use general "
+        "knowledge: if no note is relevant or does not contain the answer, say so "
+        "and stop.\n\n"
+        "When an answer draws on a note, cite it inline as a markdown link like: "
+        f"{_CITE_EXAMPLE} — using the note's actual title and file path."
+    )
+
+
 def filter_built_in_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Drop user tool definitions whose names collide with built-in Notes Tools."""
     return [t for t in tools if t.get("name") not in BUILT_IN_TOOL_NAMES]
