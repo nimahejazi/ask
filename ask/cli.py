@@ -735,7 +735,7 @@ NOTES_SUBCOMMAND_HELP = {
     "browse": "interactive browser: list, view, edit in $EDITOR, delete",
     "list": "list notes (optionally filtered by tag: ask notes list #ops)",
     "show": "print one note: ask notes show <title-or-slug>",
-    "add": "create a note: ask notes add \"text\" (or opens $EDITOR with no args)",
+    "add": 'create a note: ask notes add "text" (no args opens $EDITOR); import files: ask notes add my-folder/*.md (.md/.txt)',
     "edit": "edit one note in $EDITOR: ask notes edit <title-or-slug>",
     "delete": "delete one note (asks confirmation): ask notes delete <title-or-slug>",
     "search": "search notes semantically (text fallback when no embedding provider)",
@@ -833,7 +833,7 @@ def notes_command(argv):
         _print_note(note)
         return 0
     if sub == "add":
-        return cmd_add(store, args_text)
+        return cmd_add(store, args_text, tokens=list(ns.args + remaining))
     if sub == "edit":
         if not args_text.strip():
             _err_console().print("[red]Usage: ask notes edit <title-or-slug>[/red]")

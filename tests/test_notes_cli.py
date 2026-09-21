@@ -375,6 +375,103 @@ def test_notes_add_editor_content_not_escaped_decoded(env, capsys, monkeypatch):
     assert "\\n" in note.content  # literal backslash-n preserved
 
 
+def test_notes_add_imports_md_glob(env, tmp_path, capsys):
+    """`ask notes add <dir>/*.md` imports each file's content as a note."""
+    _write_config(env)
+    src = tmp_path / "my-folder"
+    src.mkdir()
+    (src / "alpha.md").write_text("# Alpha Note\nalpha body #alpha-tag\n")
+    (src / "beta.md").write_text("Beta Title\nbeta body\n")
+    rc = cli.main_with_args(["ask", "notes", "add", f"{src}/*.md"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    from ask.notes import default_notes_store
+    store = default_notes_store()
+    titles = [n.title for n in store.list_notes()]
+    assert "Alpha Note" in titles
+    assert "Beta Title" in titles
+    assert "alpha body" in store.find_by_title("Alpha Note").content
+    assert "alpha-note.md" in out
+    assert "from alpha.md" in out
+
+
+def test_notes_add_imports_txt_and_directory(env, tmp_path, capsys):
+    """Directories are scanned for .md/.txt children; .txt is supported."""
+    _write_config(env)
+    src = tmp_path / "docs"
+    src.mkdir()
+    (src / "a.md").write_text("Doc A\ncontent a\n")
+    (src / "b.txt").write_text("Doc B\ncontent b\n")
+    (src / "c.csv").write_text("ignore,me\n")
+    rc = cli.main_with_args(["ask", "notes", "add", str(src)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    from ask.notes import default_notes_store
+    titles = [n.title for n in default_notes_store().list_notes()]
+    assert "Doc A" in titles
+    assert "Doc B" in titles
+    assert "ignore,me" not in out
+    assert "c.csv" not in out
+
+
+def test_notes_add_skips_empty_files(env, tmp_path, capsys):
+    _write_config(env)
+    src = tmp_path / "mixed"
+    src.mkdir()
+    (src / "empty.md").write_text("\n\n")
+    (src / "real.md").write_text("Real One\nstuff\n")
+    rc = cli.main_with_args(["ask", "notes", "add", str(src)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Skipped empty file" in out
+    from ask.notes import default_notes_store
+    titles = [n.title for n in default_notes_store().list_notes()]
+    assert titles == ["Real One"]
+
+
+def test_notes_add_missing_path_errors(env, capsys):
+    """A path-looking token that resolves to nothing is an error, not note text."""
+    _write_config(env)
+    rc = cli.main_with_args(["ask", "notes", "add", "no-such-file.md"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no such file" in err
+
+
+def test_notes_add_directory_without_notes_errors(env, tmp_path, capsys):
+    _write_config(env)
+    src = tmp_path / "empty-dir"
+    src.mkdir()
+    rc = cli.main_with_args(["ask", "notes", "add", str(src)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no .md or .txt files" in err
+
+
+def test_notes_add_expands_tilde(env, tmp_path, monkeypatch, capsys):
+    _write_config(env)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "home-file.md").write_text("Home Titled\nhome body\n")
+    rc = cli.main_with_args(["ask", "notes", "add", "~/docs/home-file.md"])
+    assert rc == 0
+    from ask.notes import default_notes_store
+    titles = [n.title for n in default_notes_store().list_notes()]
+    assert "Home Titled" in titles
+
+
+def test_notes_add_plain_text_unaffected(env, capsys):
+    """Multi-word text with spaces stays plain note text (no path sniffing)."""
+    _write_config(env)
+    rc = cli.main_with_args(["ask", "notes", "add", "deploy checklist step one"])
+    assert rc == 0
+    from ask.notes import default_notes_store
+    notes = default_notes_store().list_notes()
+    assert len(notes) == 1
+    assert notes[0].title == "deploy checklist step one"
+
+
 def test_notes_only_attaches_exactly_notes_tools(env, capsys, monkeypatch):
     """--notes-only attaches exactly the 3 built-in notes tools."""
     _write_config(env, provider="mock")

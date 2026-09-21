@@ -50,6 +50,7 @@ ask -N "What is the capital of France?"
 # Notes
 ask notes                       # interactive browser (list, view, edit, delete)
 ask notes add "Deploy Checklist\nrun kubectl first #ops"
+ask notes add my-folder/*.md    # import .md/.txt files (globs, dirs, paths) as notes
 ask notes list [--tag ops]
 ask notes show deploy-checklist
 ask notes edit deploy-checklist      # opens $EDITOR

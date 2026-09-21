@@ -2,10 +2,13 @@
 
 `ask notes` opens this. Thin layer over NotesStore; questionary menus, rich tables.
 """
+import glob
 import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+from typing import List, Optional
 
 
 from rich.console import Console
@@ -18,6 +21,42 @@ ADD_TEMPLATE = """# {title}
 
 {body}
 """
+
+NOTE_FILE_SUFFIXES = (".md", ".txt")
+
+
+def _resolve_note_sources(tokens: List[str]) -> List[Path]:
+    """Expand CLI tokens into note source files (.md/.txt).
+
+    Each token may be a file, a directory (its direct .md/.txt children), or a
+    shell glob. Raises ValueError naming the offending token if it yields none.
+    """
+    sources: List[Path] = []
+    seen = set()
+    for token in tokens:
+        expanded = os.path.expanduser(token)
+        matches = sorted(glob.glob(expanded)) or ([expanded] if os.path.exists(expanded) else [])
+        if not matches:
+            raise ValueError(f"no such file: {token}")
+        for match in matches:
+            path = Path(match)
+            if path.is_dir():
+                children = sorted(
+                    child for child in path.iterdir()
+                    if child.is_file() and child.suffix.lower() in NOTE_FILE_SUFFIXES
+                )
+                if not children:
+                    raise ValueError(f"no .md or .txt files in {path}/")
+            elif path.is_file() and path.suffix.lower() in NOTE_FILE_SUFFIXES:
+                children = [path]
+            else:
+                raise ValueError(f"not a .md/.txt file: {path}")
+            for child in children:
+                resolved = child.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    sources.append(child)
+    return sources
 
 
 def _get_editor() -> str:
@@ -150,8 +189,43 @@ def _decode_shell_escapes(text: str) -> str:
     return text.replace("\\t", "\t").replace("\\n", "\n")
 
 
-def cmd_add(store: NotesStore, args_text: str = "") -> int:
-    """`ask notes add` — with text creates directly; without opens $EDITOR."""
+def _looks_like_path(token: str) -> bool:
+    """Heuristic: does this CLI token read as a file path / glob, not note text?"""
+    if any(ch in token for ch in "/*?[") or token.startswith("~"):
+        return True
+    if token.lower().endswith(NOTE_FILE_SUFFIXES):
+        return True
+    return os.path.exists(os.path.expanduser(token))
+
+
+def cmd_add(store: NotesStore, args_text: str = "", tokens: Optional[List[str]] = None) -> int:
+    """`ask notes add` — with text creates directly; without opens $EDITOR.
+
+    If every argument looks like a path (file/dir/glob), the matching .md/.txt
+    files are imported as notes instead. Mixed input falls back to note text.
+    """
+    if tokens and all(_looks_like_path(t) for t in tokens):
+        try:
+            sources = _resolve_note_sources(tokens)
+        except ValueError as e:
+            Console(file=sys.stderr).print(f"[red]Error: {e}[/red]")
+            return 1
+        imported = 0
+        for src in sources:
+            try:
+                content = src.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                console.print(f"[yellow]Skipped unreadable file[/yellow] {src}")
+                continue
+            if not content.strip():
+                console.print(f"[yellow]Skipped empty file[/yellow] {src}")
+                continue
+            path = store.create(content)
+            console.print(f"[green]Created[/green] {path.name} [dim]from {src.name}[/dim]")
+            imported += 1
+        if imported == 0:
+            console.print("[yellow]No notes created.[/yellow]")
+        return 0
     if args_text.strip():
         path = store.create(_decode_shell_escapes(args_text))
         console.print(f"[green]Created[/green] {path.name}")
